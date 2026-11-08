@@ -10,6 +10,7 @@ program cz3d_run
   use cz3d_transport_mod, only: transport_init, set_top_cooling
   use const_mod, only: Lsun
   use cz3d_app_mod
+  use cztr3d_atm_mod, only: atm_init
   implicit none
   type(arbor_domain_t) :: dom
   type(arbor_tree_t) :: tree
@@ -51,6 +52,7 @@ program cz3d_run
     if (wall_time_margin >= wall_time_max) call arbor_abort('wall_time_margin must be below the job''s wall time')
   end if
   call bg_load(grid_file, init_file, table_file, n_r_cells, r_top_rsun, g_from_background)
+  if (use_atmosphere) call atm_init()
   call transport_init(opacity_file)
   if (cool_width_hp > 0.0_dp) cool_width_km = cool_width_hp*p0(n_r)/(rho0(n_r)*g_c(n_r))/1.0e5_dp
   if (top_energy == 'cooling') call set_top_cooling(L_bottom_Lsun*Lsun, cool_width_km*1.0e5_dp)
@@ -126,6 +128,12 @@ program cz3d_run
   write(msg, '(A,I0,A,I0,A,I0,A,F6.3,A,I0,A,I0,A)') 'cz3d: ', n_r, ' radial cells (1D join cell ', k_join, '), Yin-Yang ', &
       n_theta, ' x ', 90.0_dp/real(n_theta - 2*merge(yy_margin, 3, yy_margin >= 0), dp), ' deg, ', tree%n_leaf, ' blocks on ', n_ranks, ' ranks'
   call arbor_print(msg)
+  if (use_atmosphere) then
+    write(msg, '(A,L1,A,L1,A,L1,A,F8.1,A,F6.1,A,ES9.2,A,F8.1,A,L1)') '  atmosphere: conduction ', use_conduction, &
+        ', losses ', use_losses, ', heating ', use_heating, '; switch at z = ', z_atm_km, ' km, width ', w_atm_km, &
+        ' km; H_peak ', H_peak, ', z_heat ', z_heat_km, ' km; CZ frozen ', freeze_cz
+    call arbor_print(msg)
+  end if
   write(msg, '(A,F9.1,A,F9.1,A,A,A,A,A,L1,A,F5.2)') '  r from ', (r_f(0) - r_top_cz)/1.0e5_dp, ' to ', &
       (r_f(n_r) - r_top_cz)/1.0e5_dp, ' km; walls: bottom ', trim(wall_bottom), ', top ', trim(wall_top), &
       '; MLT switch ', mlt_switch, '; diffusion h = ', diffusion_h

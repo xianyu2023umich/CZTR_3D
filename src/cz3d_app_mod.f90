@@ -20,9 +20,10 @@ module cz3d_app_mod
   ! the mass flux r^2 rho v_r odd about the wall.
   use arbor
   use cz3d_params_mod
-  use cz3d_bg_mod, only: n_r, n_c, bg_view, r_c, r_f, drdxi_c, rho0, s0, p0, lnp0, g_c, z_c, ds0dr, rho1_init, s1_init, &
+  use cz3d_bg_mod, only: k_join, n_r, n_c, bg_view, r_c, r_f, drdxi_c, rho0, s0, p0, lnp0, g_c, z_c, ds0dr, rho1_init, s1_init, &
       v_init, tab, area_f, xi, T0, ddr_c, cs0, vol_c, r_top_cz
   use cz3d_transport_mod, only: transport_column, cool_f, cool_c, grey_i0, tr_view, col_bottom, col_top
+  use cztr3d_atm_mod, only: atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce
   use eos_types, only: eos_state
   use eos_thermo, only: eos_get_from_rho_T
   use const_mod, only: Lsun
@@ -128,6 +129,9 @@ module cz3d_app_mod
   ! the current block's radial offset (cells below it) and walls (cz_bind)
   integer :: r_off = 0, grey_i0_g = 1
   logical :: at_bottom = .true., at_top = .true.
+  ! freeze_cz: each block's state at its first step (cells r_off + i <= k_join restored after every step)
+  real(dp), allocatable :: frz_B(:,:,:,:,:)
+  logical, allocatable :: frz_have(:)
   real(dp), allocatable :: work_CB(:,:,:,:)       ! W per cell from the step's first RK stage
   real(dp), allocatable :: workh_CB(:,:,:,:)      ! its horizontal pressure part -v_h.grad_h p1
   logical :: want_work = .false.
@@ -201,6 +205,7 @@ contains
     at_top = arbor_physical_side(ib, 1, 2)
     col_bottom = at_bottom
     col_top = at_top
+    if (use_atmosphere) col_top = Key_IB(KI+1, ib)*nb(1) + nb(1) == k_join   ! (grey and MLT end at the join)
   end subroutine cz_bind
 
   subroutine cz_unbind()
@@ -251,10 +256,19 @@ contains
         end if
       end do
     end if
-    if (nb(1) < n_r .and. grey_i0_g <= n_r - nb(1)) call arbor_abort('cz3d: with radial blocks the implicit grey layer '// &
+    if (use_atmosphere .and. mod(k_join, nb(1)) /= 0) call arbor_abort('cztr3d: the join cell must end a radial block '// &
+        '(k_join a multiple of the radial block size)')
+    if (nb(1) < merge(k_join, n_r, use_atmosphere) .and. grey_i0_g <= merge(k_join, n_r, use_atmosphere) - nb(1)) &
+        call arbor_abort('cz3d: with radial blocks the implicit grey layer '// &
         '(grey_top_km) must lie within the top block')
     grey_i0 = grey_i0_g
     rsst_h2015 = rsst_form == 'hotta2015'
+    if (use_atmosphere) call atm_setup()
+    if (allocated(frz_B)) deallocate(frz_B, frz_have)
+    if (freeze_cz) then
+      allocate(frz_B(nb(1), nb(2), nb(3), cz_n_var(), nBlockMax), frz_have(nBlockMax))
+      frz_have = .false.
+    end if
     if (allocated(qrad_FB)) deallocate(qrad_FB, qdif_FB)
     if (allocated(qconv_FB)) deallocate(qconv_FB)
     if (associated(f_mlt_g)) deallocate(f_mlt_g)
@@ -327,7 +341,8 @@ contains
           State_GVB(i, j, k, rho1_, iBlock) = rho1_init(i)/rq(i)
           State_GVB(i, j, k, vr_, iBlock) = v_init(i)
           State_GVB(i, j, k, s1_, iBlock) = s1_init(i)
-          if (ds1_random > 0.0_dp) State_GVB(i, j, k, s1_, iBlock) = s1_init(i) + ds1_random &
+          if (ds1_random > 0.0_dp .and. (.not. use_atmosphere .or. r_off + i <= k_join)) &
+              State_GVB(i, j, k, s1_, iBlock) = s1_init(i) + ds1_random &
               *urand(Key_IB(KP, iBlock), r_off + i, Key_IB(KI+2, iBlock)*nb(2) + j, Key_IB(KI+3, iBlock)*nb(3) + k)
         end do
       end do
@@ -706,6 +721,7 @@ contains
       end do
     end do
     dt = min(cfl/rate, dt_max)
+    if (use_atmosphere) dt = min(dt, atm_dt(iBlock))
     call cz_unbind()
   end function cz_stable_dt
 
@@ -718,6 +734,13 @@ contains
     real(dp), parameter :: c_stage(4) = [0.0_dp, 0.25_dp, 1.0_dp/3.0_dp, 0.5_dp]
     call local_steps(dt)
     dt_now = dt
+    if (freeze_cz) then
+      do jb = 1, size(iBlocks)
+        if (frz_have(iBlocks(jb))) cycle
+        frz_B(:, :, :, :, iBlocks(jb)) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), 1:nv, iBlocks(jb))
+        frz_have(iBlocks(jb)) = .true.
+      end do
+    end if
     if (lz_correct_steps > 0 .or. lz_correct_dt > 0.0_dp) call lz_impulse(dt)
     ! Coriolis split: half a rotation first (also of StateOld, the RK stages' base)
     if (omega_rot /= 0.0_dp .and. coriolis == 'split') then
@@ -767,12 +790,40 @@ contains
         call budget_hydro(iBlocks(jb), dt)
       end do
     end if
+    if (use_atmosphere) then
+      do jb = 1, size(iBlocks)
+        call cz_bind(iBlocks(jb))
+        call atm_floors(iBlocks(jb))
+      end do
+      call cz_unbind()
+    end if
     call cz_transport_all(iBlocks, dt, .false., t + dt)
+    if (use_atmosphere) then
+      ! conduction (the ghosts in every direction), losses, heating, then the floors
+      call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + dt)
+      do jb = 1, size(iBlocks)
+        call cz_bind(iBlocks(jb))
+        call atm_block(iBlocks(jb), dt, at_bottom, at_top)
+        call atm_floors(iBlocks(jb))
+      end do
+      call cz_unbind()
+    end if
     if (use_diffusion) then
       call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + dt)
       do jb = 1, size(iBlocks)
         call cz_bind(iBlocks(jb))
         call diffusion(iBlocks(jb), dt)
+        if (use_atmosphere) call atm_floors(iBlocks(jb))
+      end do
+      call cz_unbind()
+    end if
+    ! freeze_cz: the CZ cells back to their stored state
+    if (freeze_cz) then
+      do jb = 1, size(iBlocks)
+        call cz_bind(iBlocks(jb))
+        do i = 1, min(nb(1), k_join - r_off)
+          State_GVB(i, 1:nb(2), 1:nb(3), 1:nv, iBlocks(jb)) = frz_B(i, :, :, :, iBlocks(jb))
+        end do
       end do
       call cz_unbind()
     end if
@@ -948,6 +999,7 @@ contains
           do i = 1, nb(1)
             rho = rho_G(i, j, k)
             R_CV(i, j, k, vr_) = R_CV(i, j, k, vr_) - (Dr_C(i, j, k) + g_c(i)*rq(i)*State_GVB(i, j, k, rho1_, ib))/rho
+            if (use_atmosphere) R_CV(i, j, k, vr_) = R_CV(i, j, k, vr_) - S_bgf(r_off + i)*bgforce(r_off + i)/rho
             if (want_work) work_CB(i, j, k, ib) = -State_GVB(i, j, k, vr_, ib) &
                 *(Dr_C(i, j, k) + g_c(i)*rq(i)*State_GVB(i, j, k, rho1_, ib))
           end do
@@ -1543,6 +1595,7 @@ contains
     end if
     do jb = 1, size(iBlocks)
       ib = iBlocks(jb)
+      if (use_atmosphere .and. Key_IB(KI+1, ib)*nb(1) >= k_join) cycle      ! (above the join: no grey, no MLT)
       call cz_bind(ib)
       if (m == n_r) then
         call wall_bc(State_GVB, 1, nv, ib, 1, 1, 2)
@@ -1578,7 +1631,7 @@ contains
           call transport_column(dt, rho, T, P, cp, cv, Q, lnrho, q6(:, 2), q6(:, 1), q6(:, 5), State_GVB(:, j, k, vr_, ib), &
               s1, qc, &
               f_mlt, alpha_mlt, cfl, L_bottom_Lsun*Lsun, grey_tau_above, use_radiation, use_convection, &
-              use_hyperbolic, first, qrad_FB(:, j, k, ib), Qrad, wall_top == 'face', tsx)
+              use_hyperbolic, first, qrad_FB(:, j, k, ib), Qrad, wall_top == 'face' .or. use_atmosphere, tsx)
           if (budget_on .and. .not. first) then
             ! radiation (with L_bottom) and the exact cooling of each cell
             w = wyy_B(j, k, ib)
@@ -1665,6 +1718,18 @@ contains
       call faces_e(1, 0, 0, F1_FV)
       call faces_e(0, 1, 0, F2_FV)
       call faces_e(0, 0, 1, F3_FV)
+      ! with the atmosphere: only in the CZ (cells up to the join; no energy
+      ! flux above the join face; its enthalpy is linearized about the
+      ! background, which fails in the atmosphere: CZTR_2D). The join face
+      ! keeps its energy flux.
+      if (use_atmosphere) then
+        do i = max(0, k_join - r_off + 1), nb(1)
+          F1_FV(i, :, :, ie_) = 0.0_dp
+        end do
+        do i = max(1, k_join - r_off + 1), nb(1)
+          F2_FV(i, :, :, ie_) = 0.0_dp;  F3_FV(i, :, :, ie_) = 0.0_dp
+        end do
+      end if
     else
       F1_FV(:, :, :, ie_) = 0.0_dp;  F2_FV(:, :, :, ie_) = 0.0_dp;  F3_FV(:, :, :, ie_) = 0.0_dp
     end if
@@ -1683,7 +1748,7 @@ contains
             do c = vr_, s1_
               State_GVB(i, j, k, c, ib) = State_GVB(i, j, k, c, ib) - dti*Div_CV(i, j, k, c)/rho_G(i, j, k)
             end do
-            if (diffusion_heating) then
+            if (diffusion_heating .and. (.not. use_atmosphere .or. r_off + i <= k_join)) then
               dE_act = T_G(i, j, k)*(rho_new*State_GVB(i, j, k, s1_, ib) - rho_G(i, j, k)*s1o) &
                   + 0.5_dp*rho_new*sum(State_GVB(i, j, k, vr_:vp_, ib)**2) - ke_o
               State_GVB(i, j, k, s1_, ib) = State_GVB(i, j, k, s1_, ib) &
@@ -1706,7 +1771,7 @@ contains
               State_GVB(i, j, k, c, ib) = State_GVB(i, j, k, c, ib) - dti*Div_CV(i, j, k, c)
             end do
           end if
-          if (diffusion_heating) then
+          if (diffusion_heating .and. (.not. use_atmosphere .or. r_off + i <= k_join)) then
             ! the cell's energy change to first order, corrected to -dt div F_E by its entropy
             dE_act = rho_G(i, j, k)*T_G(i, j, k)*(State_GVB(i, j, k, s1_, ib) - s1o) + ho*(rho_new - rho_G(i, j, k)) &
                 + 0.5_dp*rho_new*sum(State_GVB(i, j, k, vr_:vp_, ib)**2) - ke_o
@@ -1734,7 +1799,10 @@ contains
       real(dp), intent(in) :: depth
       real(dp) :: x
       x = depth/(diff_top_km*1.0e5_dp)
-      if (x <= 1.0_dp) then
+      if (depth < 0.0_dp .and. use_atmosphere) then
+        ! above the photosphere: down to 0 at diff_top_above_km
+        w = cos(0.5_dp*pi*min(1.0_dp, -depth/(diff_top_above_km*1.0e5_dp)))**2
+      else if (x <= 1.0_dp) then
         w = 1.0_dp
       else if (x >= 2.0_dp) then
         w = 0.0_dp
@@ -2403,7 +2471,8 @@ contains
     integer, intent(in) :: iStep
     real(dp), intent(in) :: t
     real(dp) :: S(0:n_r, 19), L(0:n_r), Lres(1:n_r), mach, mach_r, dmin, vrmax, vhmax, cs, ds_h, dr_h, out(n_field), rho
-    real(dp) :: bmax, emag, ekin, eratio, divb_rel, sd, sb, dxm, wl, wi, lz, tcor, vamax, n_cap, n_all
+    real(dp) :: bmax, emag, ekin, eratio, divb_rel, sd, sb, dxm, wl, wi, lz, tcor, vamax, n_cap, n_all, trmin, trmax
+    integer :: nt                                   ! the top of the CZ (L_top, the L range): the join with the atmosphere
     integer :: jb, ib, i, j, k
     character(len=300) :: line
     mach = 0.0_dp;  mach_r = 0.0_dp;  vrmax = 0.0_dp;  vhmax = 0.0_dp;  dmin = huge(1.0_dp);  bmax = 0.0_dp
@@ -2435,7 +2504,20 @@ contains
     call cz_unbind()
     mach = arbor_max(mach);  mach_r = arbor_max(mach_r);  dmin = arbor_min(dmin);  vrmax = arbor_max(vrmax);  vhmax = arbor_max(vhmax)
     bmax = arbor_max(bmax);  vamax = arbor_max(vamax);  n_cap = arbor_sum(n_cap);  n_all = arbor_sum(n_all)
+    nt = merge(k_join, n_r, use_atmosphere)
     call angular_momentum(lz, tcor)
+    ! the transition region's height range (T = 1e5 K crossings below 10 Mm; -1 without)
+    trmin = huge(1.0_dp);  trmax = -huge(1.0_dp)
+    if (use_atmosphere) then
+      do jb = 1, nBlock
+        call cz_bind(iBlockList_I(jb))
+        call atm_tr_heights(iBlockList_I(jb), 1.0e4_dp, trmin, trmax)
+      end do
+      call cz_unbind()
+    end if
+    trmin = arbor_min(trmin);  trmax = arbor_max(trmax)
+    if (trmin > 1.0e30_dp) trmin = -1.0_dp
+    if (trmax < -1.0e30_dp) trmax = -1.0_dp
     divb_rel = 0.0_dp;  wl = 0.0_dp;  wi = 0.0_dp
     if (use_B) then
       ! rms(div B dx_min) / rms|B| over all cells (ghosts filled first)
@@ -2490,17 +2572,18 @@ contains
           '  W_Lorentz[Lsun]  dE_mag/dt(induction)[Lsun] (their sum is ~0 for walls without Poynting flux)' // &
           '  L_z[g cm2/s] (angular momentum of the flow about the global z axis, in the rotating frame)' // &
           '  T_Coriolis[g cm2/s2] (-2 Omega int rho s v_s dV: the Coriolis torque on L_z)' // &
-          '  max_v_A[cm/s] (uncapped)  cap_frac (fraction of cells with the Lorentz factor f < 0.9, see va_max)'
+          '  max_v_A[cm/s] (uncapped)  cap_frac (fraction of cells with the Lorentz factor f < 0.9, see va_max)' // &
+          '  TR_min[km]  TR_max[km] (heights of the T = 1e5 K crossings, use_atmosphere)'
       wall0 = arbor_wtime()
     end if
-    write(u_log, '(I9,ES14.6,ES11.3,3ES11.3,3F10.5,2ES11.3,F10.1,ES11.3,3F10.5,ES11.3,F9.3,2ES14.6,3ES11.3,2ES12.4,2ES14.6,2ES11.3)') iStep, t, &
-        dt_last, mach, vrmax, vhmax, L(n_r), minval(L(1:n_r-1)), maxval(L(1:n_r-1)), ds_h, dr_h, arbor_wtime() - wall0, &
-        mach_r, maxval(abs(Lres)), minval(L(1:n_r-1) + Lres(1:n_r-1)), maxval(L(1:n_r-1) + Lres(1:n_r-1)), dmin, maxval(tsc), &
-        tloc(1), tloc(n_r/2), bmax, eratio, divb_rel, wl/Lsun, wi/Lsun, lz, tcor, vamax, n_cap/max(n_all, 1.0_dp)
+    write(u_log, '(I9,ES14.6,ES11.3,3ES11.3,3F10.5,2ES11.3,F10.1,ES11.3,3F10.5,ES11.3,F9.3,2ES14.6,3ES11.3,2ES12.4,2ES14.6,2ES11.3,2F10.1)') iStep, t, &
+        dt_last, mach, vrmax, vhmax, L(nt), minval(L(1:nt-1)), maxval(L(1:nt-1)), ds_h, dr_h, arbor_wtime() - wall0, &
+        mach_r, maxval(abs(Lres(1:nt))), minval(L(1:nt-1) + Lres(1:nt-1)), maxval(L(1:nt-1) + Lres(1:nt-1)), dmin, maxval(tsc), &
+        tloc(1), tloc(n_r/2), bmax, eratio, divb_rel, wl/Lsun, wi/Lsun, lz, tcor, vamax, n_cap/max(n_all, 1.0_dp), trmin, trmax
     flush(u_log)
     write(line, '(A,I8,A,ES11.4,A,ES9.2,A,ES9.2,A,ES9.2,A,ES9.2,A,ES9.2,A,F8.5,A,F8.5,A,F8.5,A,ES9.2)') 'step ', iStep, &
         ' t=', t, ' dt=', dt_last, ' Mach=', mach, ' (red. ', mach_r, ') |vr|=', vrmax, ' |vh|=', vhmax, ' L_top=', &
-        L(n_r), ' L ', minval(L(1:n_r-1) + Lres(1:n_r-1)), '..', maxval(L(1:n_r-1) + Lres(1:n_r-1)), &
+        L(nt), ' L ', minval(L(1:nt-1) + Lres(1:nt-1)), '..', maxval(L(1:nt-1) + Lres(1:nt-1)), &
         ' rms_h(s1)=', ds_h
     call arbor_print(line)
   end subroutine cz_log

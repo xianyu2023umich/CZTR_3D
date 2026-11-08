@@ -243,7 +243,38 @@ module cz3d_params_mod
   ! --- initial perturbation: random s1 of this amplitude [erg/g/K] (0 = none) ---
   real(dp) :: ds1_random = 0.0_dp
 
-  namelist /cz3d/ grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
+  ! --- atmosphere (CZTR's TR physics, cztr3d_atm_mod; ported from CZTR_2D),
+  !     use_atmosphere: on above the CZ top through the switch
+  !     S(z) = (1 + tanh((z - z_atm)/w_atm))/2: hyperbolic Spitzer conduction
+  !     at the faces in r, theta and phi (HYDRAD's H I term, Rempel
+  !     saturation, relaxed in tau >= 4 dt, signal speed <= f_cfl_cond dx/dt;
+  !     each block keeps its own copy of a face shared with a neighbour),
+  !     Carlsson & Leenaarts + coronal losses (the column mass from p/g, the
+  !     neutral-H column integrated down within the block plus an estimate
+  !     above it), the heating H_peak x e^(1-x), x = z/z_heat, a temperature
+  !     floor where S > 0.5 and a density floor everywhere; dt <= dt_rad_factor
+  !     x the shortest loss time. The background force (dp0/dr + rho0 g) acts
+  !     above the join (the atmosphere's background is not hydrostatic); below
+  !     it is left out (well balanced). Grey radiation and MLT stay in the CZ
+  !     (cells <= k_join, the Eddington top at the photosphere as without the
+  !     atmosphere). Works with radial blocks and multirate. ---
+  logical  :: use_atmosphere = .false.
+  logical  :: use_conduction = .true., use_losses = .true., use_heating = .true.
+  real(dp) :: z_atm_km = 0.0_dp, w_atm_km = 3.0_dp
+  real(dp) :: H_peak = 1.0e-3_dp, z_heat_km = 1000.0_dp
+  real(dp) :: T_floor = 4400.0_dp, rho_floor = 1.0e-20_dp
+  real(dp) :: f_cfl_cond = 0.8_dp, dt_rad_factor = 0.1_dp
+  character(len=256) :: atomic_dir   = '../TR/atomic_data'
+  character(len=256) :: coronal_file = '../TR/RadCoolCorona_8.0.dat'
+  ! the CZ cells 1..k_join held at their starting state after every step (CZTR step 2)
+  logical  :: freeze_cz = .false.
+  ! diff_top_km above the photosphere: the full-diffusion weight falls from 1
+  ! at z = 0 to 0 at z = diff_top_above_km (cos^2), so it stays a band at the
+  ! CZ top when the atmosphere is in the domain
+  real(dp) :: diff_top_above_km = 50.0_dp
+
+  namelist /cz3d/ use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+      T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
       use_minmod, diffusion_h, diff_top_km, diffusion_heating, wall_bottom, wall_top, ds1_random, c_target, rsst_q, rsst_form, yy_margin, refine_h, patch_level, patch_lat_deg, patch_lon_deg, patch_radius_deg, probe_lat_deg, probe_lon_deg, probe_radius_deg, probe_cells, g_from_background, restart_dt, dt_budget, restart_from, restart_new_output, wall_time_max, wall_time_margin, wall_check_steps, r_top_rsun, top_energy, cool_width_km, cool_width_hp, dt1, prof_every, dt1_ramp_steps, grey_top_km, rsst_depth_km, dump_shells, omega_rot, coriolis, lz_correct_steps, lz_correct_dt, use_B, alpha_glm, glm_ch, glm_cfl_frac, b_diff_factor, va_max, b_bc_bottom, b_bc_top, b_seed, b_seed_G, b_seed_r1_rsun, b_seed_r2_rsun, export_state, import_dir, plot_blocks
@@ -273,6 +304,8 @@ contains
     if (glm_ch /= 'fast' .and. glm_ch /= 'cfl') call arbor_abort('glm_ch must be fast or cfl')
     if (b_seed /= 'none' .and. b_seed /= 'toroidal') call arbor_abort('b_seed must be none or toroidal')
     if (top_energy /= 'eddington' .and. top_energy /= 'cooling') call arbor_abort('top_energy must be eddington or cooling')
+    if (use_atmosphere .and. (dt1 > 0.0_dp .or. dt_budget > 0.0_dp)) call arbor_abort('use_atmosphere needs dt1 = 0 and dt_budget = 0')
+    if (use_atmosphere .and. top_energy /= 'eddington') call arbor_abort('use_atmosphere needs top_energy = eddington')
   end subroutine read_params
 
 end module cz3d_params_mod

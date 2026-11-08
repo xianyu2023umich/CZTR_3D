@@ -70,7 +70,7 @@ contains
     n_r = n_r_in
     if (n_r <= 0) n_r = k_join
     if (r_top_rsun > 0.0_dp) n_r = count(rc_all(1:k_join) <= r_top_rsun*Rsun)
-    if (n_r + 2 > n_full) stop 'cz3d: n_r too large for the grid'
+    if (n_r > n_full) stop 'cz3d: n_r too large for the grid'      ! (the grid file has the ghosts n_full+1, +2)
     n_c = n_r
     do j = -1, n_full + 2
       if (abs(row(1, j) - rc_all(j)) > 1.0e-6_dp*(rf_all(1) - rf_all(0))) stop 'cz3d: state and grid cells differ'
