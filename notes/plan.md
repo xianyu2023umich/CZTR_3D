@@ -88,3 +88,13 @@ visuals first, convergence studies later. 0.234 deg only after it works.
 ## Status
 
 - 2026-11-07: copy of CZ_3D e0703a4; builds; smoke checksum identical.
+- 2026-11-07: radial grid data/grid_atm25.dat (tools/grid/extend_grid.py):
+  448 cells = 16 x 28. Cells 1..252 (faces 0..252) identical to
+  grid_015a1.dat: the 196 CZ cells and the chromosphere to z = 2 Mm (~31 km
+  cells, 65 km at 2 Mm). Above: geometric growth (ramping to 5% per cell,
+  neighbour ratio <= 1.051) until dr = 0.918 r dtheta (0.469 deg), then dr
+  ~ r dtheta to 2.5 R (no extra refinement there, the user). dr: 202 km at
+  5 Mm, 950 km at 20 Mm, 4.5 Mm at 100 Mm, 9 Mm at 0.5 R up, 12.7 Mm at
+  1 R up. 252 cells above the photosphere (162 above 1.01 R, 87 above 1.3 R).
+  (--smax 0.08 gives 420 cells.) Next: the initial/background state on this
+  grid (CZTR_2D's atmosphere builder).
