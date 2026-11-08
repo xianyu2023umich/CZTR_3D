@@ -1,0 +1,59 @@
+#!/bin/bash
+# cz3d.x on ACES (TAMU HPRC). Copy, edit the #SBATCH lines, submit from the
+# CZ_3D directory:
+#
+#   sbatch tools/job.aces runs/<case>.nml
+#
+# Build (login node) with the GCC + OpenMPI toolchain, loaded before
+# configuring (configure records the modules; this script loads them again):
+#   module purge; module load foss/2023b
+#   make -C ../EOS/eos_hhe omp   (after ./configure there)
+#   make -C ../ARBOR install MODE=opt
+#   ./configure && make && make data
+# Nodes: 2 x 48-core Xeon 8468 (Sapphire Rapids), 96 cores; queue cpu (3 days).
+# The executable and the launcher (LAUNCHER in config.mk: srun, or
+# ./configure --launcher=mpirun) come from config.mk. Put large output on
+# /scratch/user/$USER.
+#
+# Job chains: as tools/job.stampede3 (wall_time_max a bit below --time,
+# restart_dt > 0; the job resubmits itself from the restart until finished).
+#
+# Monitor: squeue -u $USER;  tail -f out_dir/log.txt;  cancel: scancel <jobid>
+
+#SBATCH -J cz3d                 # job name
+#SBATCH -o cz3d.o%j             # stdout (the run's own log is out_dir/log.txt)
+#SBATCH -e cz3d.e%j             # stderr
+#SBATCH -p cpu                  # queue
+#SBATCH -N 1                    # nodes
+#SBATCH --ntasks-per-node 96    # MPI ranks per node = cores
+#SBATCH -t 02:00:00             # wall time limit (hh:mm:ss)
+#SBATCH --mem=0                 # all of the node's memory
+
+set -e
+nml=${1:?usage: sbatch tools/job.aces <namelist>}
+cd "$SLURM_SUBMIT_DIR"
+cfg() { sed -n "s/^$1 *= *//p" config.mk | head -1; }
+[ -f config.mk ] || { echo "job: no config.mk (run ./configure)"; exit 1; }
+mods=$(cfg MODULES | tr ':' ' ')
+if [ -n "$mods" ]; then module purge; module load $mods; fi
+ulimit -s unlimited             # automatic arrays are on the stack
+export OMP_NUM_THREADS=1        # one rank per core
+
+out_dir=$(sed -n "s/^ *out_dir *= *'\([^']*\)'.*/\1/p" "$nml" | head -1)
+echo "job $SLURM_JOB_ID: $nml on $SLURM_NNODES nodes x $SLURM_NTASKS_PER_NODE ranks ($SLURM_JOB_PARTITION)"
+$(cfg LAUNCHER) ./$(cfg EXE) "$nml"
+
+status=$(head -1 "$out_dir/run_status.txt" 2>/dev/null || echo "missing")
+set -- $status
+if [ "$1" = "stopped_wall" ]; then
+  next="${nml%.nml}_cont.nml"
+  # continue from the restart: replace (or add) restart_from, keep the output series
+  sed -e "/^ *restart_from *=/d" -e "/^ *restart_new_output *=/d" "$nml" \
+    | sed "s#^&cz3d#\&cz3d\n  restart_from = '$2'#" > "$next"
+  # resubmit the script this job was submitted with (not $0: SLURM runs a spooled copy)
+  self=$(scontrol show job "$SLURM_JOB_ID" | sed -n 's/^ *Command=\([^ ]*\).*/\1/p')
+  sbatch "${self:-tools/job.aces}" "$next"
+  echo "job: continuing from $2 with $next"
+else
+  echo "job: done ($status)"
+fi

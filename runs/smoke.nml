@@ -1,0 +1,22 @@
+! Smoke test (make smoke, or a short batch job): runs/full100.nml for 300
+! steps from the static start (1.0 R, 1.875 deg, 111 radial cells), no
+! restarts. On 8 ranks it ends with
+!   state checksum: 38440707489373
+! with gfortran 14 on macOS (Apple silicon), ARBOR's opt flags, eos_hhe from
+! 2026-10-22 on and Accelerate's array exp/log (src/vmath_accelerate.f90); other
+! compilers or platforms: compare log.txt with output/smoke/log.txt of a
+! reference run (steps 100-300: L_top 0.95432 0.95648 0.95705).
+&cz3d
+  out_dir = 'output/smoke'
+  r_top_rsun = 1.0
+  wall_top = 'cell'
+  top_energy = 'eddington', grey_tau_above = 0.01
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 10.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24
+  dt1 = 60.0
+  t_end = 1.0e9, n_step_max = 300, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 1000, plot_dt = 0.0, restart_dt = 0.0
+/

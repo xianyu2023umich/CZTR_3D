@@ -1,0 +1,25 @@
+# run output (large) and builds
+output/
+build/
+*.x
+*.o
+*.mod
+*.rst
+*.plt
+
+# generated inputs (`make data`): EOS-derived, rebuilt on each machine
+data/eos_table.bin
+data/static_init*.dat
+# generated radial grids (make data/static_init_<name>.dat); kept: the two below
+data/grid_*.dat
+!data/grid_full.dat
+!data/grid_r141.dat
+data/static_profile.dat
+
+# Python, editors, OS
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+*.dSYM/
+config.mk

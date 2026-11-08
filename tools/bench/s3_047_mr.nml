@@ -1,0 +1,20 @@
+! Stampede3 benchmark (tools/bench/submit.sh): as s3_047_lts.nml, with
+! global steps and multirate (mr_levels = 8) instead of local stepping: the
+! speed and load balance of multirate across nodes, for the levels from
+! 0.234 deg on. 200 level-1 steps would take long: 20 here.
+&cz3d
+  grid_file = 'data/grid_015a1.dat', init_file = 'data/static_init_015a1.dat'
+  out_dir = 'output/s3_047_mr', import_dir = 'output/c196_m0_r2c10_d500_export', nb_r = 28, grey_top_km = 500.0, mr_levels = 8
+  r_top_rsun = 1.0
+  wall_top = 'cell'
+  top_energy = 'eddington', grey_tau_above = 0.01
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0
+  ds1_random = 10.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2
+  dt1 = 0.0
+  t_end = 1.0e9, n_step_max = 20, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 100000, plot_dt = 0.0, restart_dt = 0.0
+/

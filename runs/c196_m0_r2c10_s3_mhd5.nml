@@ -1,0 +1,39 @@
+! Rerun of runs/c196_m0_r2c10_s3_mhd4.nml with re-levelling per radial shell.
+! mhd4 set the levels per block at the restart and daily: they followed the
+! strong-field blocks horizontally (the fastest level only 11-59 of 8064
+! blocks: no speed gain, ~10.5 model s/s as mhd3), neighbouring top columns
+! ran on different steps, rms_h(s1) in the top ~450 km jumped after the
+! re-level at t = 2.3335e6, and the run went NaN at t = 2.368e6 (origin near
+! the Yin corner at lat -45, lon 135). Now the levels are set once, at the
+! restart (not periodically, as tested in the cap runs); every radial shell takes
+! one level (mr_by_shell, the default: the shell's fastest block), so the
+! near-surface layer stays on a single step as in mhd2/mhd3. Alfven cap
+! va_max = 10 km/s (runs/captest_va*.nml, 35 min each from this restart:
+! dt +23%, model time per wall time +18% (12.5 -> 14.8 model s/s), ~1e-6 of
+! the cells capped, no measurable energy sink; near-surface profiles within
+! a few percent, T within 0.4%).
+! Restarts every 3 model days (~5 h of wall time; ~4.4 GB each, ~10 in a
+! 48 h job: delete old ones). The job's own time limit stops the run:
+!   sbatch -N 6 --ntasks-per-node 96 -t 48:00:00 tools/job.stampede3_spr4 runs/c196_m0_r2c10_s3_mhd5.nml
+&cz3d
+  grid_file = 'data/grid_015a1.dat', init_file = 'data/static_init_015a1.dat'
+  restart_from = 'output/c196_m0_r2c10_s3_mhd3/restart_00674576.rst'
+  restart_new_output = .true.
+  out_dir = 'output/c196_m0_r2c10_s3_mhd5'
+  r_top_rsun = 1.0
+  wall_top = 'cell'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0
+  use_B = .true., b_seed = 'toroidal', b_seed_G = 100.0, b_seed_r1_rsun = 0.95, b_seed_r2_rsun = 0.98   ! (no new seed: the restart holds the field)
+  b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  ds1_random = 10.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  dt1 = 0.0, mr_levels = 8, mr_relevel = .true., mr_relevel_dt = 0.0, mr_by_shell = .true.
+  va_max = 1.0e6
+  t_end = 7.344e6, n_step_max = 10000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 1000, plot_dt = 0.0, restart_dt = 259200.0
+  wall_time_margin = 1800.0
+/

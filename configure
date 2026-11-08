@@ -1,0 +1,117 @@
+#!/bin/sh
+# Configure the CZ_3D build: find ARBOR and eos_hhe, check that they were
+# built with the same compiler, write config.mk (read by the Makefile; not
+# kept in the repository).
+#
+#   ./configure                                  ARBOR ../ARBOR/install/opt
+#   ./configure --arbor=../ARBOR/install/opt-intel
+#   ./configure --help
+#
+# Options:
+#   --arbor=DIR    ARBOR install prefix (holds share/arbor.mk); the compiler,
+#                  MPI wrapper and optimization flags are ARBOR's
+#   --eos=DIR      eos_hhe OpenMP build (holds eos_hhe.mk); default
+#                  ../EOS/eos_hhe/build-omp, or build-omp-intel for Intel
+#   --python=CMD   Python 3 with numpy, for `make data` (default python3)
+#   --launcher=CMD MPI launcher in batch jobs (default ibrun if present, else srun)
+set -e
+
+arbor=../ARBOR/install/opt
+eos=
+python=python3
+launcher=
+args="$*"
+for a in "$@"; do
+  case "$a" in
+    --arbor=*) arbor=${a#--arbor=} ;;
+    --eos=*) eos=${a#--eos=} ;;
+    --python=*) python=${a#--python=} ;;
+    --launcher=*) launcher=${a#--launcher=} ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "configure: unknown option $a (see --help)"; exit 1 ;;
+  esac
+done
+die() { echo "configure: $*"; exit 1; }
+getvar() { sed -n "s/^$2 *:*= *//p" "$1" | head -1; }   # getvar <file.mk> <name>
+
+# ARBOR: the compiler family and the MPI wrapper
+[ -f "$arbor/share/arbor.mk" ] || die "no $arbor/share/arbor.mk: install ARBOR (make install MODE=opt [COMPILER=intel]) or give --arbor"
+arbor=$(cd "$arbor" && pwd)
+family=$(getvar "$arbor/share/arbor.mk" ARBOR_COMPILER)
+mpifc=$(getvar "$arbor/share/arbor.mk" ARBOR_FC)
+[ -n "$family" ] || family=gnu                  # installs before ARBOR_COMPILER: gnu
+command -v ${mpifc%% *} >/dev/null 2>&1 || die "ARBOR's compiler '$mpifc' not found (module not loaded?)"
+version=$($mpifc --version 2>&1 | head -1)
+case "$version" in
+  *"GNU Fortran"*) actual=gnu ;;
+  *IFX*|*IFORT*|*ifx*|*ifort*) actual=intel ;;
+  *) actual=unknown ;;
+esac
+[ "$actual" = "$family" ] || die "ARBOR was installed as '$family' but $mpifc now runs: $version"
+
+# eos_hhe: the same family
+if [ -z "$eos" ]; then
+  if [ "$family" = intel ]; then eos=../EOS/eos_hhe/build-omp-intel; else eos=../EOS/eos_hhe/build-omp; fi
+fi
+[ -f "$eos/eos_hhe.mk" ] || die "no $eos/eos_hhe.mk: build eos_hhe (./configure [--fc=...] && make omp) or give --eos"
+eos=$(cd "$eos" && pwd)
+eos_family=$(getvar "$eos/eos_hhe.mk" EOS_HHE_FAMILY)
+[ "$eos_family" = "$family" ] || die "eos_hhe in $eos is a '$eos_family' build, ARBOR is '$family'"
+
+if [ "$family" = gnu ]; then
+  omp=-fopenmp; longlines=-ffree-line-length-none; moddir='-J$(1)'; suffix=
+else
+  omp=-qopenmp; longlines=-diag-disable=5268; moddir='-module $(1)'; suffix=-intel
+fi
+
+# check: a program using both libraries compiles and links (not run: MPI
+# programs may not run on login nodes)
+tmp=$(mktemp -d 2>/dev/null || mktemp -d -t czconf)
+trap 'rm -rf "$tmp"' EXIT
+cat > "$tmp/p.f90" <<'EOF'
+program conf_p
+  use arbor
+  use eos_table, only: eos_table_t
+  implicit none
+  type(eos_table_t) :: tab
+  print *, 'ok'
+end program conf_p
+EOF
+mflag=$(echo "$moddir" | sed "s#\$(1)#$tmp#")
+if ! (cd "$tmp" && $mpifc $omp $mflag -I"$arbor/include" -I"$eos/mod" p.f90 \
+      "$arbor/lib/libarbor.a" "$eos/libeos_hhe.a" -o p.x > log 2>&1); then
+  echo "configure: test program (use arbor, use eos_table) failed:"
+  head -20 "$tmp/log"
+  exit 1
+fi
+
+# Python for make data (a warning only)
+if ! $python -c 'import numpy' >/dev/null 2>&1; then
+  echo "configure: warning: '$python' with numpy not found; needed by make data (--python=...)"
+fi
+if [ -z "$launcher" ]; then
+  if command -v ibrun >/dev/null 2>&1; then launcher=ibrun; else launcher=srun; fi
+fi
+
+cat > config.mk <<EOF
+# CZ_3D build configuration, written by: ./configure $args
+# $(date '+%Y-%m-%d %H:%M') on $(hostname)
+# compiler: $mpifc -> $version
+ARBOR_MK  = $arbor/share/arbor.mk
+HHE       = $eos
+COMPILER  = $family
+OMP       = $omp
+LONGLINES = $longlines
+moddir    = $moddir
+BUILD     = build$suffix
+EXE       = cz3d$suffix.x
+PYTHON    = $python
+# for batch jobs (tools/chain.slurm): the launcher and the modules loaded at configure time
+LAUNCHER  = $launcher
+MODULES   = ${LOADEDMODULES:-}
+EOF
+echo "configure: $family ($mpifc -> $version)"
+echo "  ARBOR    $arbor"
+echo "  eos_hhe  $eos"
+echo "  build    build$suffix/ -> cz3d$suffix.x; jobs launch with $launcher"
+echo "  wrote config.mk"

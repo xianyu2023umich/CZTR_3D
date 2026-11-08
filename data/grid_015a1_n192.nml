@@ -1,0 +1,11 @@
+! As data/grid_015a1.nml (CZTR's density map, radial cells no taller than the
+! horizontal spacing at 0.15 deg, base at the convection-zone base), scaled to
+! exactly 192 cells below the photosphere (8 radial blocks of 24 cells; cells
+! ~2% larger than the 196-cell grid). The atmosphere above takes the count the
+! same density gives.
+! make data/static_init_015a1_n192.dat -> data/grid_015a1_n192.dat, data/static_init_015a1_n192.dat
+&grid
+  p_base = 5.89e13
+  horiz_deg = 0.15, aspect = 1.0
+  n_cz = 192
+/

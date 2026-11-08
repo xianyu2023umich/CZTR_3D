@@ -1,0 +1,18 @@
+! Scaling benchmark (tools/bench/submit.sh): the 1.0 R setup of runs/full100.nml
+! at 0.47 deg (n_theta = 192: 1152 blocks of 8 x 24 x 111 cells), 200 steps
+! from the static start, no restarts or profiles. The cost per step does not
+! depend on the flow; the time step (~2.14 s) is set by the 30 km top cells.
+&cz3d
+  out_dir = 'output/bench192'
+  r_top_rsun = 1.0
+  wall_top = 'cell'
+  top_energy = 'eddington', grey_tau_above = 0.01
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 10.0
+  yy_margin = 0, n_theta = 192, n_phi = 576, nb_theta = 8, nb_phi = 24
+  dt1 = 60.0
+  t_end = 1.0e9, n_step_max = 200, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 100000, plot_dt = 0.0, restart_dt = 0.0
+/

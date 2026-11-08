@@ -1,0 +1,14 @@
+! Radial grid for 0.15 deg horizontal resolution: CZTR's density map (5 cells
+! per H_p, 30 km floor; tools/grid/grid_mod.f90) with radial cells no taller
+! than 2 x the horizontal spacing r dtheta. 141 cells to the photosphere (60
+! below 0.96 R, 83 below 0.99 R); the deep cells 2.6-3.3 Mm instead of 11 Mm.
+! make data/static_init_015a2.dat -> data/grid_015a2.dat, data/static_init_015a2.dat
+! The base at P = 5.89e13, the static envelope's convection-zone base
+! (0.7115 R): the default 6e13 (CZTR's grid) lies ~1 Mm deeper, in a thin
+! radiative layer; a cell there (1.3 Mm cells) gives the 4th-order face
+! derivative of s0 a spurious superadiabatic overshoot at face 2 and a
+! +-4 Lsun MLT / numerical diffusion pair (output_studio/c197_m0).
+&grid
+  p_base = 5.89e13
+  horiz_deg = 0.15, aspect = 2.0
+/

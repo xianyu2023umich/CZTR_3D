@@ -1,0 +1,78 @@
+#!/bin/bash
+# cz3d.x on Stampede3 (TACC), 4 SPR nodes x 112 ranks, 8 h jobs (a copy of
+# tools/job.stampede3 for the 0.47 deg runs; chained jobs keep these settings).
+# Copy, edit the #SBATCH lines, submit from the
+# CZ_3D directory:
+#
+#   sbatch tools/job.stampede3 runs/<case>.nml
+#
+# Build (login node; default modules intel + impi):
+#   make -C ../EOS/eos_hhe omp   (after ./configure --fc=ifx there)
+#   make -C ../ARBOR install MODE=opt COMPILER=intel INTEL_ARCH=-xCORE-AVX512
+#   ./configure --arbor=../ARBOR/install/opt-intel && make && make data
+# -xCORE-AVX512 runs on every Stampede3 CPU (skx, icx, spr); -xSAPPHIRERAPIDS
+# runs on spr only (and was not faster here). The executable, the launcher
+# (ibrun) and the modules come from config.mk.
+#
+# Queues: skx (48 cores/node), icx (80), spr (112), and skx-dev for short
+# tests; set --ntasks-per-node to the node's core count. Large output belongs
+# on $SCRATCH (purged when unused): set out_dir there or link output/ to it.
+#
+# Job chains (TACC allows no sbatch on compute nodes, so the whole chain is
+# submitted at once from the login node): if the namelist sets wall_time_max a
+# bit below the --time limit (seconds; e.g. 172800 - 1800 for 48 h, with
+# wall_time_margin = 1800) and restart_dt > 0, the run stops with a restart
+# and writes out_dir/run_status.txt ('stopped_wall <restart>'). Each job
+# first reads that file: after 'stopped_wall' it continues from the named
+# restart, after 'finished' it exits at once. Submit N jobs in a row:
+#   bash tools/submit_chain.sh <job script> <namelist> N [sbatch options]
+# Bound a chained run by t_end (n_step_max counts each job's own steps).
+# restart_from must sit on a line of its own in the namelist.
+#
+# Monitor: squeue -u $USER;  tail -f out_dir/log.txt;  cancel: scancel <jobid>
+
+#SBATCH -J cz3d                 # job name
+#SBATCH -o cz3d.o%j             # stdout (the run's own log is out_dir/log.txt)
+#SBATCH -e cz3d.e%j             # stderr
+#SBATCH -p spr                  # queue: skx, skx-dev, icx, spr
+#SBATCH -N 4                    # nodes
+#SBATCH --ntasks-per-node 112   # MPI ranks per node = cores (skx 48, icx 80, spr 112)
+#SBATCH -t 08:00:00             # wall time limit (hh:mm:ss)
+###SBATCH --mail-type=all
+###SBATCH --mail-user=xianyu@umich.edu
+
+set -e
+nml=${1:?usage: sbatch tools/job.stampede3 <namelist>}
+cd "$SLURM_SUBMIT_DIR"
+cfg() { sed -n "s/^$1 *= *//p" config.mk | head -1; }
+[ -f config.mk ] || { echo "job: no config.mk (run ./configure)"; exit 1; }
+mods=$(cfg MODULES | tr ':' ' ')
+if [ -n "$mods" ]; then module purge; module load $mods; fi
+ulimit -s unlimited             # automatic arrays are on the stack
+export OMP_NUM_THREADS=1        # one rank per core
+export UCX_LOG_LEVEL=ERROR      # Intel MPI: no warnings for > 128 ranks
+
+out_dir=$(sed -n "s/^ *out_dir *= *'\([^']*\)'.*/\1/p" "$nml" | head -1)
+# a chain: continue from the previous job's restart, or stop if the run is done
+status=$(head -1 "$out_dir/run_status.txt" 2>/dev/null || echo "missing")
+set -- $status
+if [ "$1" = "finished" ]; then
+  echo "job $SLURM_JOB_ID: $out_dir is finished ($status), nothing to do"; exit 0
+elif [ "$1" = "stopped_wall" ]; then
+  next="${nml%.nml}_cont.nml"
+  # restart_from replaced (or added), restart_new_output dropped: the output series continues
+  sed -e "/^ *restart_from *=/d" -e "/^ *restart_new_output *=/d" "$nml" \
+    | sed "s#^&cz3d#\&cz3d\n  restart_from = '$2'#" > "$next"
+  echo "job $SLURM_JOB_ID: continuing from $2 with $next"
+  nml=$next
+fi
+echo "job $SLURM_JOB_ID: $nml on $SLURM_NNODES nodes x $SLURM_NTASKS_PER_NODE ranks ($SLURM_JOB_PARTITION)"
+# the job's remaining wall time [s] (squeue %L: [D-]HH:MM:SS, MM:SS or
+# UNLIMITED) for cz3d: it caps the namelist's wall_time_max, so the run stops
+# with a restart and run_status.txt whatever -t was given
+left=$(squeue -h -j "$SLURM_JOB_ID" -o %L 2>/dev/null || true)
+secs=$(echo "$left" | awk -F'[-:]' 'NF {n = NF; s = $n + 60*$(n-1); if (n >= 3) s += 3600*$(n-2); if (n >= 4) s += 86400*$(n-3); print int(s)}')
+if [ "${secs:-0}" -gt 0 ] 2>/dev/null; then export CZ3D_WALL_TIME_MAX=$secs; fi
+echo "job $SLURM_JOB_ID: time left $left (CZ3D_WALL_TIME_MAX=${CZ3D_WALL_TIME_MAX:-unset})"
+ibrun ./$(cfg EXE) "$nml"
+echo "job $SLURM_JOB_ID: $(head -2 "$out_dir/run_status.txt" 2>/dev/null | tr '\n' ' ')"
