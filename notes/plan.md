@@ -110,5 +110,21 @@ visuals first, convergence studies later. 0.234 deg only after it works.
   continues the CZ slope, ~4780 K. rho0 <= rho in every cell (rho/rho0 1.3-2.2
   in chromosphere/TR, 3-10 in the corona); largest second difference of
   ln rho0 per cell 0.100 at 2.2 Mm (CZTR's own background: 0.108), 2e-3 at
-  the join. Next: the code (bg_load for the extended grid, atmosphere
-  modules from CZTR_2D).
+  the join.
+- 2026-11-08: atmosphere ported (src/cztr3d_atm_mod.f90, commit 8acec12),
+  with radial blocks and multirate (CZTR_2D needed whole columns and single
+  rate). Choices: conduction faces in r, theta, phi, each block its own copy
+  of shared faces (ghosts); chromospheric column mass from p/g, neutral-H
+  column within the block + ghost estimate above; grey radiation and MLT
+  only in the CZ (the join block is the transport top, Eddington top at the
+  photosphere; no grey in the atmosphere, only thin losses: also avoids
+  CZTR_2D's grey + C&L double counting); background force above the join;
+  diffusion heating only in the CZ; diff_top band above the photosphere
+  (diff_top_above_km); freeze_cz. The join must end a radial block (196 =
+  7 x 28). No change without use_atmosphere (smoke checksum identical).
+  First test (1.875 deg, laptop, frozen CZ from the static start, CZTR's
+  heating, 30 coarse steps = 1312 s model, 837 s wall, ~1.6 model s/s):
+  8 levels (finest 0.37 s), TR 1.73-1.91 Mm (CZTR 1D 1.72-1.84), coronal
+  flows up to ~50 km/s (Mach 0.3) from the non-equilibrium 1.5 MK start,
+  rms_h(s1) growing to ~8e5 then flat and horizontal flows ~200 m/s: to
+  locate (profiles). Run on the Studio / plugged in: tests take >10 min.
