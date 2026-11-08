@@ -68,7 +68,7 @@ visuals first, convergence studies later. 0.234 deg only after it works.
   block (grey_top_km); where does the atmosphere's radiation live?
 - PFSS on Yin-Yang: how to import (interpolate the extrapolated field to the
   cell centres, then clean div B with GLM?).
-- The heating function (survey pending).
+- The heating function: survey in notes/heating.md (first choice: (H_B|B| + H0) exp(-h/lambda), gated on density).
 - Synthetic EUV: in-situ optically thin projection with AIA response
   functions (R(T) tables from aiapy/CHIANTI), one MPI reduction per image;
   304 A excluded (optically thick).
