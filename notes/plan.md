@@ -96,5 +96,19 @@ visuals first, convergence studies later. 0.234 deg only after it works.
   ~ r dtheta to 2.5 R (no extra refinement there, the user). dr: 202 km at
   5 Mm, 950 km at 20 Mm, 4.5 Mm at 100 Mm, 9 Mm at 0.5 R up, 12.7 Mm at
   1 R up. 252 cells above the photosphere (162 above 1.01 R, 87 above 1.3 R).
-  (--smax 0.08 gives 420 cells.) Next: the initial/background state on this
-  grid (CZTR_2D's atmosphere builder).
+  (--smax 0.08 gives 420 cells.)
+- 2026-11-07: init/background data/init_atm25.dat (tools/build_atm_init.py,
+  figure notes/fig/init_atm25.png). CZ cells (<= 196): state and background
+  exactly static_init_015a1.dat (CZ_3D restarts keep their meaning).
+  Initial atmosphere: CZTR's 1D step-3 state to z = 3 Mm (rho x 1.0071 to
+  match our photosphere), then T -> 1.5 MK (C1, w 10 Mm) and hydrostatic
+  (mu 0.593) to 2.5 R: rho 9e-18 at 0.29 R up, 2.9e-19 at the top.
+  Background above the join: rho0 = rho_A + rho_B; rho_A CZTR's exponential
+  (H 119.7 km at the join from the CZ background's slope -> H_inf 103 km by
+  bisection, blend 300 km), rho_B hydrostatic at 1.2 MK, 0.1 x the state at
+  3 Mm (falls faster than the state: margin if the corona cools). T0
+  continues the CZ slope, ~4780 K. rho0 <= rho in every cell (rho/rho0 1.3-2.2
+  in chromosphere/TR, 3-10 in the corona); largest second difference of
+  ln rho0 per cell 0.100 at 2.2 Mm (CZTR's own background: 0.108), 2e-3 at
+  the join. Next: the code (bg_load for the extended grid, atmosphere
+  modules from CZTR_2D).

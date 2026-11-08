@@ -24,3 +24,4 @@ __pycache__/
 *.dSYM/
 config.mk
 !data/grid_atm25.dat
+!data/init_atm25.dat
