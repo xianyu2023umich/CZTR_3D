@@ -25,3 +25,6 @@ __pycache__/
 config.mk
 !data/grid_atm25.dat
 !data/init_atm25.dat
+!data/grid_atm20.dat
+!data/init_atm20.dat
+data/eos_table_wind.bin

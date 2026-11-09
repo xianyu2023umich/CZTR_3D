@@ -1,0 +1,11 @@
+! EOS table for the solar-wind runs (domain to 20 R_sun): as data/eos_table.nml
+! (the same X, Z, the same resolution per decade in rho and per k/m_H in s)
+! but down to rho = 1e-24 g/cm3 and up to s = 125 k/m_H (the wind at 20 R_sun
+! reaches ~7e-22 g/cm3 at 1.5 MK, s ~100). Generate with
+!   ../EOS/eos_hhe/build-omp/eos_table_gen data/eos_table_wind.nml
+&eos_table
+  output = 'data/eos_table_wind.bin'
+  X = 0.75, Z = 0.02, coulomb = .true.
+  rho_min = 1.0e-24, rho_max = 0.3, n_rho = 975
+  s_min_kmh = 10.0, s_max_kmh = 125.0, n_s = 2001
+/
