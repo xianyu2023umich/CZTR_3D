@@ -78,9 +78,10 @@ program cz3d_run
     ! with use_B the file may be hydrodynamic (fewer variables): B and psi
     ! then start at zero and get the seed below
     if (use_B) then
-      call arbor_restart_read(app, restart_from, dom, tree, t, i_step, n_var_file=n_var_file)
+      call arbor_restart_read(app, restart_from, dom, tree, t, i_step, n_var_file=n_var_file, &
+          domain_tol=restart_domain_tol)
     else
-      call arbor_restart_read(app, restart_from, dom, tree, t, i_step)
+      call arbor_restart_read(app, restart_from, dom, tree, t, i_step, domain_tol=restart_domain_tol)
       n_var_file = cz_n_var()
     end if
     call arbor_ghost_build(tree, dom, bc=wall_bc)

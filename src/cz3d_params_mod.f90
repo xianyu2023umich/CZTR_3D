@@ -88,6 +88,11 @@ module cz3d_params_mod
   ! top down as dt1 drops below each shell's own step)
   integer  :: dt1_ramp_steps = 0
   integer  :: prof_every = 0              ! > 0: a profile every prof_every steps (instead of dt_prof)
+  ! > 0: accept a restart file written on another machine (e.g. 1e-10), whose
+  ! grid (map ends, face positions) differs in the last bits; this run uses its
+  ! own grid (bit differences: fine for plots and analysis; a continued run is
+  ! not bitwise the same as one on the original machine). 0: exact match
+  real(dp) :: restart_domain_tol = 0.0_dp
   logical :: restart_new_output = .false.  ! after a restart: a new profile series (from 0, the first now)
   ! batch jobs: stop cleanly, with a restart file, once the elapsed wall time
   ! (from the program's start) plus wall_time_margin reaches wall_time_max
@@ -291,7 +296,7 @@ module cz3d_params_mod
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
-      use_minmod, diffusion_h, diff_top_km, diffusion_heating, wall_bottom, wall_top, ds1_random, c_target, rsst_q, rsst_form, yy_margin, refine_h, patch_level, patch_lat_deg, patch_lon_deg, patch_radius_deg, probe_lat_deg, probe_lon_deg, probe_radius_deg, probe_cells, g_from_background, restart_dt, dt_budget, restart_from, restart_new_output, wall_time_max, wall_time_margin, wall_check_steps, r_top_rsun, top_energy, cool_width_km, cool_width_hp, dt1, prof_every, dt1_ramp_steps, grey_top_km, rsst_depth_km, dump_shells, omega_rot, coriolis, lz_correct_steps, lz_correct_dt, use_B, alpha_glm, glm_ch, glm_cfl_frac, b_diff_factor, va_max, b_bc_bottom, b_bc_top, b_seed, b_seed_G, b_seed_r1_rsun, b_seed_r2_rsun, export_state, import_dir, plot_blocks
+      use_minmod, diffusion_h, diff_top_km, diffusion_heating, wall_bottom, wall_top, ds1_random, c_target, rsst_q, rsst_form, yy_margin, refine_h, patch_level, patch_lat_deg, patch_lon_deg, patch_radius_deg, probe_lat_deg, probe_lon_deg, probe_radius_deg, probe_cells, g_from_background, restart_dt, dt_budget, restart_from, restart_domain_tol, restart_new_output, wall_time_max, wall_time_margin, wall_check_steps, r_top_rsun, top_energy, cool_width_km, cool_width_hp, dt1, prof_every, dt1_ramp_steps, grey_top_km, rsst_depth_km, dump_shells, omega_rot, coriolis, lz_correct_steps, lz_correct_dt, use_B, alpha_glm, glm_ch, glm_cfl_frac, b_diff_factor, va_max, b_bc_bottom, b_bc_top, b_seed, b_seed_G, b_seed_r1_rsun, b_seed_r2_rsun, export_state, import_dir, plot_blocks
 
 contains
 
