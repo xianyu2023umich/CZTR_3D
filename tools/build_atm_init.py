@@ -37,6 +37,12 @@ v_z0 and v_z1), so the start conserves mass. The background gets a floor
 rho_fl = floor_frac x min(rho) (>= --rho0-min) so that it stays within the
 EOS table far out and below the state.
 
+Optional (--state-profile file): the atmosphere state (cells above the
+join) taken from a profile file's <rho>, <T>, <v_r> (a relaxed run on the
+same grid, e.g. the steady 1D wind), the ghosts above the top extrapolated
+(rho ~ r^-2, T and v copied); the background is then built from that state
+(with --parker's coronal background part).
+
 Usage: build_atm_init.py grid.dat cz_init.dat cztr_step3_init.dat out.dat
        [--z-cut-km 3000] [--T-corona 1.5e6] [--wT-km 10000] [--mu 0.593]
        [--blend-km 300] [--n-fit 4] [--Tb-frac 0.8] [--fB 0.1]
@@ -89,6 +95,7 @@ def main():
     ap.add_argument('--v-z1-km', type=float, default=5000.0, help='... to here (cos^2 step)')
     ap.add_argument('--floor-frac', type=float, default=0.0, help='background floor: this x min(rho) above the join')
     ap.add_argument('--rho0-min', type=float, default=0.0, help='background floor at least this (EOS table)')
+    ap.add_argument('--state-profile', default='', help='the atmosphere state from this profile file')
     a = ap.parse_args()
 
     n, rc, rf = read_grid(a.grid)
@@ -164,6 +171,18 @@ def main():
         parker_info = ('Parker: c %.1f km/s, sonic point %.2f R_sun, mass flux at 1 AU %.3e g/cm2/s '
                        '(n v %.2e cm-2 s-1), blend %.2f-%.2f R_sun'
                        % (c / 1e5, rs / RSUN, F / 1.496e13 ** 2, F / 1.496e13 ** 2 / (a.mu * MH), a.parker_r1, a.parker_r2))
+
+    # --- the atmosphere state from a relaxed profile (same grid)
+    if a.state_profile:
+        Pf = np.loadtxt(a.state_profile)
+        if Pf.shape[0] != n or not np.allclose(Pf[:, 1], rc[2:n + 2], rtol=1e-10, atol=0):
+            raise SystemExit('the state profile is not on this grid')
+        jj = np.arange(n + 4)
+        sel = (jj > k + 1) & (jj <= n + 1)               # array rows of cells k+1..n
+        rho[sel] = Pf[jj[sel] - 2, 3];  T[sel] = Pf[jj[sel] - 2, 4];  v[sel] = Pf[jj[sel] - 2, 7]
+        for jg in (n + 2, n + 3):                         # ghosts n+1, n+2
+            rho[jg] = rho[n + 1]*(rc[n + 1]/rc[jg])**2;  T[jg] = T[n + 1];  v[jg] = v[n + 1]
+        parker_info = (parker_info + '; ' if parker_info else '') + 'atmosphere state from ' + a.state_profile
 
     # --- background above the join (CZTR's construction)
     blend = a.blend_km * 1e5

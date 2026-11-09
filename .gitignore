@@ -28,3 +28,4 @@ config.mk
 !data/grid_atm20.dat
 !data/init_atm20.dat
 data/eos_table_wind.bin
+!data/init_wind20.dat

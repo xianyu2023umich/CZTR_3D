@@ -1,0 +1,36 @@
+! CZTR_3D step 2 with the solar wind, 1.875 deg (Studio, 8 ranks): the
+! atmosphere to 20 R_sun (data/grid_atm20.dat, 560 cells) starting from the
+! steady 1D wind of CZTR_2D (runs/wind1_lts20.nml; data/init_wind20.dat, the
+! background rebuilt from that state) on the frozen static CZ. Outflow top,
+! CZTR's heating + the extended term (5e-7 erg cm^-3 s^-1, 0.7 R_sun),
+! Spitzer blended to the collisionless flux beyond ~5 R (AWSoM), the EOS
+! table extended to rho 1e-24 (data/eos_table_wind.bin: generate with
+! ../EOS/eos_hhe/build-omp/eos_table_gen data/eos_table_wind.nml), the
+! density floor at its edge. Local time stepping (dt1 = 20 s, single rate):
+! relaxation only. No field. Without B the whole sphere is "open": the 3D
+! version of the 1D wind (600 km/s at 20 R, sonic point 3 R, n v at 1 AU
+! 2.7e8 cm^-2 s^-1). Profiles every 200 steps (~65 s of global time),
+! restarts every 600 s of global time (~1850 steps, ~1.3 GB each); ~1 s per
+! step on 8 laptop cores: 20000 steps ~6-8 h, stop earlier once steady.
+!   mpirun -n 8 ./cztr3d.x runs/wind3d_relax.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = 'output/wind3d_relax'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, nb_r = 28
+  use_atmosphere = .true., freeze_cz = .true.
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  dt1 = 20.0
+  t_end = 1.0e9, n_step_max = 20000, dt_max = 20.0
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 600.0
+  wall_check_steps = 20
+/
