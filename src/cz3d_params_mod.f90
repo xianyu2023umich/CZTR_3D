@@ -264,8 +264,8 @@ module cz3d_params_mod
   real(dp) :: H_peak = 1.0e-3_dp, z_heat_km = 1000.0_dp
   real(dp) :: T_floor = 4400.0_dp, rho_floor = 1.0e-20_dp
   real(dp) :: f_cfl_cond = 0.8_dp, dt_rad_factor = 0.1_dp
-  character(len=256) :: atomic_dir   = '../TR/atomic_data'
-  character(len=256) :: coronal_file = '../TR/RadCoolCorona_8.0.dat'
+  character(len=256) :: atomic_dir   = 'data/atomic'                        ! (copied from FALCON/TR/atomic_data)
+  character(len=256) :: coronal_file = 'data/atomic/RadCoolCorona_8.0.dat'   ! (from FALCON/TR)
   ! the CZ cells 1..k_join held at their starting state after every step (CZTR step 2)
   logical  :: freeze_cz = .false.
   ! diff_top_km above the photosphere: the full-diffusion weight falls from 1
