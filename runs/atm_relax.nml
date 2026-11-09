@@ -1,0 +1,26 @@
+! CZTR_3D step 2 at 1.875 deg (Studio, 8 ranks): the atmosphere (CZTR's 1D
+! state to 3 Mm + a 1.5 MK hydrostatic corona to 2.5 R, data/init_atm25.dat)
+! on the frozen static CZ, CZTR's prescribed heating (H_peak x e^(1-x), z_heat
+! 1 Mm), no field. Goals: (1) where the horizontal structure seen in the first
+! laptop test (rms_h(s1) ~8e5, h-flows ~200 m/s from a uniform start) comes
+! from: profiles every 5 coarse steps (~200 s of model time); (2) the corona
+! relaxing toward its equilibrium with this heating. Speed ~1.6 model s/s
+! (laptop): 1 h of model time ~40 min of wall time. Restarts every 15 min of
+! model time (~1.1 GB each at 1.875 deg).
+!   mpirun -n 8 ./cz3d.x runs/atm_relax.nml
+&cz3d
+  grid_file = 'data/grid_atm25.dat', init_file = 'data/init_atm25.dat', n_r_cells = 448
+  out_dir = 'output/atm_relax'
+  wall_top = 'cell'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 10.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, nb_r = 28
+  dt1 = 0.0, mr_levels = 8
+  use_atmosphere = .true., freeze_cz = .true.
+  t_end = 7200.0, n_step_max = 10000000, dt_max = 1.0e4
+  n_log = 1, dt_prof = 0.0, prof_every = 5, plot_dt = 0.0, restart_dt = 900.0
+/
