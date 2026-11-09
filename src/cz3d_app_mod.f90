@@ -1640,7 +1640,16 @@ contains
     end if
     do jb = 1, size(iBlocks)
       ib = iBlocks(jb)
-      if (use_atmosphere .and. Key_IB(KI+1, ib)*nb(1) >= k_join) cycle      ! (above the join: no grey, no MLT)
+      if (use_atmosphere .and. Key_IB(KI+1, ib)*nb(1) >= k_join) then
+        ! above the join: no grey, no MLT (their fluxes 0, for the profiles)
+        if (qconv_face) then
+          FaceState_FVDB(:, :, :, 1, 1, ib) = 0.0_dp
+        else
+          qconv_FB(:, :, :, ib) = 0.0_dp
+        end if
+        qrad_FB(:, :, :, ib) = 0.0_dp
+        cycle
+      end if
       call cz_bind(ib)
       if (m == n_r) then
         call wall_bc(State_GVB, 1, nv, ib, 1, 1, 2)
