@@ -65,6 +65,7 @@ module cz3d_app_mod
   real(dp), pointer :: f_mlt_g(:,:) => null()     ! (0:n_r, level 0:max(refine_h, patch_level))
   integer :: lev_view = 0                         ! the bound block's horizontal level
   real(dp), allocatable :: rho0_w(:), rq_w(:)      ! rho0, rq of the whole column, cells -1:n_r+2 (wall ghosts)
+  real(dp), allocatable :: s0_w(:), r_w(:)         ! s0, r_c of the whole column (outflow ghosts)
   ! import: the export files' index (import_open)
   integer, allocatable :: imp_key(:,:), imp_file(:)
   integer(i8), allocatable :: imp_pos(:)
@@ -310,8 +311,10 @@ contains
     rq = 1.0_dp
     if (rsst_h2015) rq = 1.0_dp/xi**2
     call background_h_phi()
-    allocate(rho0_w(-1:n_r+2), rq_w(-1:n_r+2))
+    allocate(rho0_w(-1:n_r+2), rq_w(-1:n_r+2), s0_w(-1:n_r+2), r_w(-1:n_r+2))
     rho0_w = rho0(-1:n_r+2)
+    s0_w = s0(-1:n_r+2)
+    r_w = r_c(-1:n_r+2)
     rq_w = rq(-1:n_r+2)
     allocate(rho_G(1-ng:nb(1)+ng, 1-ng:nb(2)+ng, 1-ng:nb(3)+ng))
     allocate(p1_G, cs_G, W_G, lim_G, T_G, hP_G, mold=rho_G)
@@ -582,6 +585,10 @@ contains
     character(len=12) :: bc
     logical :: odd
     wt = merge(wall_bottom, wall_top, iSide == 1)
+    if (iDir == 1 .and. iSide == 2 .and. wt == 'outflow') then
+      call outflow_top(Key_IB(KI+1, iBlock)*nb(1))
+      return
+    end if
     wall = merge(WALL_FACE, WALL_CELL, wt == 'face')
     bc = merge(b_bc_bottom, b_bc_top, iSide == 1)
     do v = iVarMin, iVarMax
@@ -601,6 +608,33 @@ contains
       if (v == rho1_ .and. iDir == 1 .and. allocated(rho0_w)) call relative_rho1(Key_IB(KI+1, iBlock)*nb(1))
     end do
   contains
+    ! wall_top = 'outflow': rho ~ r^-2, v_r >= 0 copied, v_h and s copied;
+    ! B_r ~ r^-2, B_h and psi copied
+    subroutine outflow_top(off)
+      integer, intent(in) :: off
+      integer :: g, m, dst, v
+      real(dp) :: q2
+      m = nb(1)
+      do g = 1, nGhost
+        dst = m + g
+        q2 = (r_w(off+m)/r_w(off+dst))**2
+        do v = iVarMin, min(iVarMax, nv)
+          if (v == rho1_) then
+            A(dst, :, :, v, iBlock) = ((rho0_w(off+m) + rq_w(off+m)*A(m, :, :, v, iBlock))*q2 - rho0_w(off+dst)) &
+                /rq_w(off+dst)
+          else if (v == vr_) then
+            A(dst, :, :, v, iBlock) = max(A(m, :, :, v, iBlock), 0.0_dp)
+          else if (v == s1_) then
+            A(dst, :, :, v, iBlock) = A(m, :, :, v, iBlock) + s0_w(off+m) - s0_w(off+dst)
+          else if (use_B .and. v == br_) then
+            A(dst, :, :, v, iBlock) = A(m, :, :, v, iBlock)*q2
+          else
+            A(dst, :, :, v, iBlock) = A(m, :, :, v, iBlock)
+          end if
+        end do
+      end do
+    end subroutine outflow_top
+
     subroutine relative_rho1(off)
       integer, intent(in) :: off
       integer :: g, dst, src
@@ -631,7 +665,7 @@ contains
         W(1, :, :) = 0.0_dp;  W(0, :, :) = -W(2, :, :);  W(-1, :, :) = -W(3, :, :)
       end if
     end if
-    if (at_top) then
+    if (at_top .and. wall_top /= 'outflow') then
       if (wall_top == 'face') then
         W(m+1, :, :) = -W(m, :, :);  W(m+2, :, :) = -W(m-1, :, :)
       else
@@ -721,7 +755,7 @@ contains
       end do
     end do
     dt = min(cfl/rate, dt_max)
-    if (use_atmosphere) dt = min(dt, atm_dt(iBlock))
+    if (use_atmosphere) dt = min(dt, atm_dt(iBlock, rate_r(1:nb(1))))
     call cz_unbind()
   end function cz_stable_dt
 
@@ -803,7 +837,7 @@ contains
       call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + dt)
       do jb = 1, size(iBlocks)
         call cz_bind(iBlocks(jb))
-        call atm_block(iBlocks(jb), dt, at_bottom, at_top)
+        call atm_block(iBlocks(jb), dt, at_bottom, at_top, shell_steps())
         call atm_floors(iBlocks(jb))
       end do
       call cz_unbind()
@@ -1256,6 +1290,17 @@ contains
     dti = tsc(i)*dt_now
     ch = max(ch, glm_cfl_frac*cfl/(s_inv*dti))
   end function ch_cell
+
+  ! The bound block's step factors (local time stepping) with those of the
+  ! cells below and above it (cells 0:nb(1)+1; at a wall the end cell's own)
+  function shell_steps() result(sc)
+    real(dp) :: sc(0:nb(1)+1)
+    integer :: m
+    m = nb(1)
+    sc(1:m) = tsc(1:m)
+    sc(0) = merge(tsc(1), tsc_g(max(r_off, 1)), at_bottom)
+    sc(m+1) = merge(tsc(m), tsc_g(min(r_off + m + 1, n_r)), at_top)
+  end function shell_steps
 
   ! The Alfven-speed cap (va_max > 0, after Rempel 2009/2017): the Lorentz
   ! force's factor f = 1/sqrt(1 + (v_A/va_max)^4) for |B|^2 = b2 and the
@@ -1824,7 +1869,7 @@ contains
       m = nb(1)
       do c = c1, c2
         par = merge(-1.0_dp, 1.0_dp, c == vr_)
-        if (at_top) then
+        if (at_top .and. wall_top /= 'outflow') then
           if (wall_top == 'cell') then
             F1_FV(m, :, :, c) = -par*F1_FV(m - 1, :, :, c)
           else if (c /= vr_) then

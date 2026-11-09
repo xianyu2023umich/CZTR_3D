@@ -32,6 +32,7 @@ module cztr3d_atm_mod
   private
 
   real(dp), parameter :: kappa0_spitzer = 7.8e-7_dp, T_SWITCH = 2.4e4_dp, T_SWITCH_WIDTH = 3.0e3_dp
+  real(dp), parameter :: Rsun_atm = 6.957e10_dp, kB_atm = 1.380649e-16_dp
   integer, parameter :: RHO1 = 1, VR = 2, VT = 3, VP = 4, S1 = 5
 
   type(species_table_t) :: h1_tab, ca2_tab, mg2_tab
@@ -127,12 +128,16 @@ contains
   end subroutine states
 
   ! Conduction, losses and heating of block ib over dt (ghosts filled;
-  ! at_bot/at_top: the block holds the bottom/top wall of the domain)
-  subroutine atm_block(ib, dt, at_bot, at_top)
+  ! at_bot/at_top: the block holds the bottom/top wall of the domain);
+  ! stf(0:nb(1)+1): the step factors of the cells (local time stepping; with
+  ! the cells below and above the block): cell i advances stf(i) dt, a radial
+  ! face the smaller step of its two cells
+  subroutine atm_block(ib, dt_in, at_bot, at_top, stf)
     integer, intent(in) :: ib
-    real(dp), intent(in) :: dt
+    real(dp), intent(in) :: dt_in
     logical, intent(in) :: at_bot, at_top
-    real(dp) :: Tf, rf, Tg, csf, cvf, dxf, vf, x, dQ, Sc, Sf, sth
+    real(dp), intent(in) :: stf(0:)
+    real(dp) :: Tf, rf, Tg, csf, cvf, dxf, vf, x, dQ, Sc, Sf, sth, dt, fS, qcl
     real(dp) :: colH(nb(1)), dr, qd, ionH, lT, w, nHt, QH, iH, QCa, iCa, QMg, iMg, chromo, coron, Qheat, Qlos, colm
     integer :: i, j, k, m
     m = nb(1)
@@ -148,8 +153,15 @@ contains
             Sf = atm_switch(r_f(i) - r_top_cz)
             if (Sf < 1.0e-8_dp .or. (i == 0 .and. at_bot) .or. (i == m .and. at_top)) then
               qr_B(i, j, k, ib) = 0.0_dp
+              ! an outflow top: the top cell passes the conductive energy on
+              ! (the same F A through its top face as through the face below)
+              if (i == m .and. at_top .and. wall_top == 'outflow') then
+                qr_B(m, j, k, ib) = qr_B(m-1, j, k, ib)*(r_f(m-1)/r_f(m))**2
+                F1(m, j, k, 1) = qr_B(m, j, k, ib)
+              end if
               cycle
             end if
+            dt = dt_in*min(stf(i), stf(i+1))
             dxf = r_c(i+1) - r_c(i)
             Tf = 0.5_dp*(T_A(i, j, k) + T_A(i+1, j, k))
             rf = 0.5_dp*(rho_A(i, j, k) + rho_A(i+1, j, k))
@@ -157,7 +169,14 @@ contains
             cvf = 0.5_dp*(cv_A(i, j, k) + cv_A(i+1, j, k))
             Tg = (T_A(i+1, j, k) - T_A(i, j, k))/dxf
             vf = 0.5_dp*abs(State_GVB(i, j, k, VR, ib) + State_GVB(i+1, j, k, VR, ib))
-            call face_flux(Sf, Tf, rf, csf, cvf, Tg, dxf, vf, qr_B(i, j, k, ib))
+            fS = 1.0_dp;  qcl = 0.0_dp
+            if (cond_r_rsun > 0.0_dp) then
+              ! AWSoM: Spitzer -> the collisionless flux (3/2) alpha p_e v_r far out
+              fS = 1.0_dp/(1.0_dp + (r_f(i)/(cond_r_rsun*Rsun_atm))**2)
+              qcl = 1.5_dp*alpha_cl*kB_atm*Tf*0.5_dp*(ne_A(i, j, k) + ne_A(i+1, j, k)) &
+                  *0.5_dp*(State_GVB(i, j, k, VR, ib) + State_GVB(i+1, j, k, VR, ib))
+            end if
+            call face_flux(Sf, Tf, rf, csf, cvf, Tg, dxf, vf, qr_B(i, j, k, ib), fS, qcl)
             F1(i, j, k, 1) = qr_B(i, j, k, ib)
           end do
         end do
@@ -170,13 +189,16 @@ contains
               qt_B(i, j, k, ib) = 0.0_dp
               cycle
             end if
+            dt = dt_in*stf(i)
             Tf = 0.5_dp*(T_A(i, j, k) + T_A(i, j+1, k))
             rf = 0.5_dp*(rho_A(i, j, k) + rho_A(i, j+1, k))
             csf = 0.5_dp*(cs_A(i, j, k) + cs_A(i, j+1, k))
             cvf = 0.5_dp*(cv_A(i, j, k) + cv_A(i, j+1, k))
             Tg = (T_A(i, j+1, k) - T_A(i, j, k))/(r_c(i)*dxf)
             vf = 0.5_dp*abs(State_GVB(i, j, k, VT, ib) + State_GVB(i, j+1, k, VT, ib))
-            call face_flux(Sc, Tf, rf, csf, cvf, Tg, r_c(i)*dxf, vf, qt_B(i, j, k, ib))
+            fS = 1.0_dp
+            if (cond_r_rsun > 0.0_dp) fS = 1.0_dp/(1.0_dp + (r_c(i)/(cond_r_rsun*Rsun_atm))**2)
+            call face_flux(Sc, Tf, rf, csf, cvf, Tg, r_c(i)*dxf, vf, qt_B(i, j, k, ib), fS, 0.0_dp)
             F2(i, j, k, 1) = qt_B(i, j, k, ib)
           end do
         end do
@@ -192,13 +214,16 @@ contains
               qp_B(i, j, k, ib) = 0.0_dp
               cycle
             end if
+            dt = dt_in*stf(i)
             Tf = 0.5_dp*(T_A(i, j, k) + T_A(i, j, k+1))
             rf = 0.5_dp*(rho_A(i, j, k) + rho_A(i, j, k+1))
             csf = 0.5_dp*(cs_A(i, j, k) + cs_A(i, j, k+1))
             cvf = 0.5_dp*(cv_A(i, j, k) + cv_A(i, j, k+1))
             Tg = (T_A(i, j, k+1) - T_A(i, j, k))/(r_c(i)*sth*dxf)
             vf = 0.5_dp*abs(State_GVB(i, j, k, VP, ib) + State_GVB(i, j, k+1, VP, ib))
-            call face_flux(Sc, Tf, rf, csf, cvf, Tg, r_c(i)*sth*dxf, vf, qp_B(i, j, k, ib))
+            fS = 1.0_dp
+            if (cond_r_rsun > 0.0_dp) fS = 1.0_dp/(1.0_dp + (r_c(i)/(cond_r_rsun*Rsun_atm))**2)
+            call face_flux(Sc, Tf, rf, csf, cvf, Tg, r_c(i)*sth*dxf, vf, qp_B(i, j, k, ib), fS, 0.0_dp)
             F3(i, j, k, 1) = qp_B(i, j, k, ib)
           end do
         end do
@@ -207,7 +232,7 @@ contains
       do k = 1, nb(3)
         do j = 1, nb(2)
           do i = 1, m
-            dQ = -dt*Dv(i, j, k, 1)
+            dQ = -dt_in*stf(i)*Dv(i, j, k, 1)
             if (dQ == 0.0_dp) cycle
             x = dQ/(rho_A(i, j, k)*cv_A(i, j, k)*T_A(i, j, k))
             State_GVB(i, j, k, S1, ib) = State_GVB(i, j, k, S1, ib) + cv_A(i, j, k)*log(1.0_dp + max(x, -0.9_dp))
@@ -260,10 +285,12 @@ contains
             if (use_heating) then
               x = max(z_c(i), 0.0_dp)/(z_heat_km*1.0e5_dp)
               Qheat = Sc*H_peak*x*exp(1.0_dp - x)
+              if (H_c > 0.0_dp) Qheat = Qheat + Sc*H_c*exp(-max(z_c(i), 0.0_dp)/(lambda_c_km*1.0e5_dp))
+              if (H_ext > 0.0_dp) Qheat = Qheat + Sc*H_ext*exp(-max(z_c(i), 0.0_dp)/(lambda_ext_rsun*Rsun_atm))
             end if
           end if
           Qloss_B(i, j, k, ib) = Qlos
-          State_GVB(i, j, k, S1, ib) = State_GVB(i, j, k, S1, ib) + dt*(Qheat - Qlos)/(rho_A(i, j, k)*T_A(i, j, k))
+          State_GVB(i, j, k, S1, ib) = State_GVB(i, j, k, S1, ib) + dt_in*stf(i)*(Qheat - Qlos)/(rho_A(i, j, k)*T_A(i, j, k))
         end do
       end do
     end do
@@ -271,15 +298,17 @@ contains
 
   contains
 
-    ! CZTR's hyperbolic face flux: target -fsat k0 T^2.5 dT/dx, relaxed
-    subroutine face_flux(Sf, Tf, rf, csf, cvf, Tg, dx, vf, q)
-      real(dp), intent(in) :: Sf, Tf, rf, csf, cvf, Tg, dx, vf
+    ! CZTR's hyperbolic face flux: target -fsat k0 T^2.5 dT/dx, relaxed;
+    ! fS: the Spitzer weight, qcl: the collisionless flux (weight 1 - fS)
+    subroutine face_flux(Sf, Tf, rf, csf, cvf, Tg, dx, vf, q, fS, qcl)
+      real(dp), intent(in) :: Sf, Tf, rf, csf, cvf, Tg, dx, vf, fS, qcl
       real(dp), intent(inout) :: q
       real(dp) :: k0, Fc, qt, D, budget, tau
       k0 = Sf*(kappa0_spitzer + blend_weight(Tf, T_SWITCH, T_SWITCH_WIDTH)*extra_h_kappa0(hcond_tab, log10(Tf)))
       Fc = k0*Tf**2.5_dp*Tg
       qt = -Fc/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
-      D = k0*Tf**2.5_dp/(rf*cvf)
+      qt = fS*qt + (1.0_dp - fS)*Sf*qcl
+      D = fS*k0*Tf**2.5_dp/(rf*cvf)
       budget = max(f_cfl_cond*dx/dt - vf, 1.0e-3_dp*dx/dt)
       tau = max(D/budget**2, 4.0_dp*dt)
       q = qt + (q - qt)*exp(-dt/tau)
@@ -307,9 +336,11 @@ contains
   end subroutine atm_floors
 
   ! dt_rad_factor x the shortest loss time rho cv T/Q_loss of block ib (the
-  ! last step's losses; huge if none)
-  real(dp) function atm_dt(ib) result(dt)
+  ! last step's losses; huge if none); rate_r (optional): per radial cell,
+  ! raised to cfl over the cell's own loss-time limit (local time stepping)
+  real(dp) function atm_dt(ib, rate_r) result(dt)
     integer, intent(in) :: ib
+    real(dp), intent(inout), optional :: rate_r(:)
     real(dp) :: out(n_field), rh
     integer :: i, j, k
     dt = huge(1.0_dp)
@@ -321,6 +352,8 @@ contains
           rh = rho0(i) + State_GVB(i, j, k, RHO1, ib)
           call eos_eval(tab, rh, s0(i) + State_GVB(i, j, k, S1, ib), out)
           dt = min(dt, rh*exp(out(F_LNCV))*exp(out(F_LNT))/Qloss_B(i, j, k, ib))
+          if (present(rate_r)) rate_r(i) = max(rate_r(i), cfl*Qloss_B(i, j, k, ib) &
+              /(dt_rad_factor*rh*exp(out(F_LNCV))*exp(out(F_LNT))))
         end do
       end do
     end do

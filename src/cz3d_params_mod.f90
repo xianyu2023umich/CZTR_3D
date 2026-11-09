@@ -239,6 +239,11 @@ module cz3d_params_mod
   !     or 'cell' (wall at the boundary cell's centre, v_r = 0 there, ghosts
   !     mirror the two cells inside); CZTR step 1: bottom face, top cell ---
   character(len=8) :: wall_bottom = 'face', wall_top = 'cell'
+  ! wall_top = 'outflow' (solar wind, the top far out, ~20 R_sun, where the
+  ! flow is super-Alfvenic): the ghosts above the top cell extrapolated: the
+  ! total density ~ r^-2, v_r copied but not inward (>= 0), v_theta, v_phi
+  ! and the total entropy copied; B_r ~ r^-2, B_theta, B_phi, psi copied;
+  ! the top face's fluxes from these ghosts (not from the wall symmetry)
 
   ! --- initial perturbation: random s1 of this amplitude [erg/g/K] (0 = none) ---
   real(dp) :: ds1_random = 0.0_dp
@@ -259,6 +264,15 @@ module cz3d_params_mod
   !     (cells <= k_join, the Eddington top at the photosphere as without the
   !     atmosphere). Works with radial blocks and multirate. ---
   logical  :: use_atmosphere = .false.
+  ! more heating, S [H_c exp(-z/lambda_c) + H_ext exp(-z/lambda_ext)]
+  ! [erg cm^-3 s^-1] (Downs et al. 2010: the quiet-Sun term H_c 7.28e-5 with
+  ! lambda_c 40 Mm, the extended term H_ext 5e-7 with lambda_ext 0.7 R_sun,
+  ! which keeps the corona hot far out and drives the solar wind); 0 = off
+  real(dp) :: H_c = 0.0_dp, lambda_c_km = 4.0e4_dp, H_ext = 0.0_dp, lambda_ext_rsun = 0.7_dp
+  ! conduction blended to a collisionless flux far out (AWSoM, van der Holst
+  ! et al. 2014): q = f_S q_Spitzer + (1 - f_S) (3/2) alpha_cl p_e v_r (radial
+  ! faces), f_S = 1/(1 + (r/cond_r_rsun)^2); cond_r_rsun = 0: Spitzer only
+  real(dp) :: cond_r_rsun = 0.0_dp, alpha_cl = 1.05_dp
   logical  :: use_conduction = .true., use_losses = .true., use_heating = .true.
   real(dp) :: z_atm_km = 0.0_dp, w_atm_km = 3.0_dp
   real(dp) :: H_peak = 1.0e-3_dp, z_heat_km = 1000.0_dp
@@ -273,7 +287,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -291,7 +305,8 @@ contains
     read(cfg%lines, nml=cz3d, iostat=ios, iomsg=msg)
     call arbor_config_check(cfg, 'cz3d', ios, msg)
     if (wall_bottom /= 'face' .and. wall_bottom /= 'cell') call arbor_abort('wall_bottom must be face or cell')
-    if (wall_top /= 'face' .and. wall_top /= 'cell') call arbor_abort('wall_top must be face or cell')
+    if (wall_top /= 'face' .and. wall_top /= 'cell' .and. wall_top /= 'outflow') &
+        call arbor_abort('wall_top must be face, cell or outflow')
     if (rsst_form /= 'hotta2012' .and. rsst_form /= 'hotta2015') call arbor_abort('rsst_form must be hotta2012 or hotta2015')
     if (dt1 > 0.0_dp .and. dt_budget > 0.0_dp) call arbor_abort('dt1 (local time stepping) does not conserve energy: set dt_budget = 0')
     if (use_B .and. dt_budget > 0.0_dp) call arbor_abort('the energy budget does not include the magnetic field: set dt_budget = 0')
@@ -304,7 +319,8 @@ contains
     if (glm_ch /= 'fast' .and. glm_ch /= 'cfl') call arbor_abort('glm_ch must be fast or cfl')
     if (b_seed /= 'none' .and. b_seed /= 'toroidal') call arbor_abort('b_seed must be none or toroidal')
     if (top_energy /= 'eddington' .and. top_energy /= 'cooling') call arbor_abort('top_energy must be eddington or cooling')
-    if (use_atmosphere .and. (dt1 > 0.0_dp .or. dt_budget > 0.0_dp)) call arbor_abort('use_atmosphere needs dt1 = 0 and dt_budget = 0')
+    ! (local time stepping, dt1 > 0, works with the atmosphere: relaxation, e.g. of the wind)
+    if (use_atmosphere .and. dt_budget > 0.0_dp) call arbor_abort('use_atmosphere needs dt_budget = 0')
     if (use_atmosphere .and. top_energy /= 'eddington') call arbor_abort('use_atmosphere needs top_energy = eddington')
   end subroutine read_params
 
