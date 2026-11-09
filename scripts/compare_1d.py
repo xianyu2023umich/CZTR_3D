@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare a cz3d.x run's horizontally averaged profiles with a CZTR (1D) run.
+"""Compare a cztr3d.x run's horizontally averaged profiles with a CZTR (1D) run.
 
 Usage: /usr/bin/python3 scripts/compare_1d.py <3D run dir> <1D run dir> [out.png]
 

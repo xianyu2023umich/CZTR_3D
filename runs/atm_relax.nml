@@ -7,7 +7,7 @@
 ! relaxing toward its equilibrium with this heating. Speed ~1.6 model s/s
 ! (laptop): 1 h of model time ~40 min of wall time. Restarts every 15 min of
 ! model time (~1.1 GB each at 1.875 deg).
-!   mpirun -n 8 ./cz3d.x runs/atm_relax.nml
+!   mpirun -n 8 ./cztr3d.x runs/atm_relax.nml
 &cz3d
   grid_file = 'data/grid_atm25.dat', init_file = 'data/init_atm25.dat', n_r_cells = 448
   out_dir = 'output/atm_relax'

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Job chain for long cz3d.x runs on SLURM machines (a template: adapt the
+# Job chain for long cztr3d.x runs on SLURM machines (a template: adapt the
 # #SBATCH lines, modules and paths to the machine).
 #
 #   sbatch tools/chain.slurm runs/<case>.nml

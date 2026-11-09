@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Steps to relax a cz3d.x run from t = 0, estimated before running it, for
+"""Steps to relax a cztr3d.x run from t = 0, estimated before running it, for
 a series of local-stepping thresholds dt1.
 
 Usage: /usr/bin/python3 scripts/estimate_steps.py <run.nml> [key=value ...] [dt1=a,b,...] [calibrate]
 
 key=value overrides namelist entries (r_top_rsun, c_target, rsst_q, cfl, ...);
 dt1 takes a comma list (0 = time accurate, inf = no cap). The script runs
-cz3d.x for zero steps (1 rank) to get the background and the RSST factor
+cztr3d.x for zero steps (1 rank) to get the background and the RSST factor
 (background.dat), and takes the convective flux of the 1D model from
 prof1d (default: CZTR's step-1 profile behind the 3D initial state).
 
@@ -78,9 +78,9 @@ def background(nml, over):
         body = set_key(body, k, v)
     f = os.path.join(tmp, 'run.nml')
     open(f, 'w').write(body)
-    r = subprocess.run(['mpirun', '-np', '1', os.path.join(HERE, 'cz3d.x'), f], cwd=HERE, capture_output=True, text=True)
+    r = subprocess.run(['mpirun', '-np', '1', os.path.join(HERE, 'cztr3d.x'), f], cwd=HERE, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(os.path.join(tmp, 'background.dat')):
-        sys.exit('cz3d.x failed:\n' + r.stdout[-2000:] + r.stderr[-2000:])
+        sys.exit('cztr3d.x failed:\n' + r.stdout[-2000:] + r.stderr[-2000:])
     head = open(os.path.join(tmp, 'background.dat')).readline().split()
     return np.loadtxt(os.path.join(tmp, 'background.dat')), body, dict(zip(head[1::2], head[2::2]))
 

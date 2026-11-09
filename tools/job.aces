@@ -1,5 +1,5 @@
 #!/bin/bash
-# cz3d.x on ACES (TAMU HPRC). Copy, edit the #SBATCH lines, submit from the
+# cztr3d.x on ACES (TAMU HPRC). Copy, edit the #SBATCH lines, submit from the
 # CZ_3D directory:
 #
 #   sbatch tools/job.aces runs/<case>.nml

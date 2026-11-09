@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""cz3d.x init file from the static CZ envelope (build/static_bg.x): the state
+"""cztr3d.x init file from the static CZ envelope (build/static_bg.x): the state
 and the background are both the static model (rho1 = s1 = v = 0), on the
-radial grid, in the init format cz3d.x reads (bg_load: i r z rho T v rho0 T0 g
+radial grid, in the init format cztr3d.x reads (bg_load: i r z rho T v rho0 T0 g
 for cells -1..n+2, after a line "n k").
 
 Usage: python3 tools/build_static_init.py <static_profile.dat> <grid_full.dat> <out.dat>
@@ -11,7 +11,7 @@ its centre at or below R_sun (tau = 0.01 of the static model). Cells up to
 k + 2 come from the static model: ln rho and ln T interpolated linearly in r
 (the model's ~4000 points are far finer than the grid), extrapolated linearly
 above R_sun for the two ghost cells of a 1.0 R top; g = G M_r / r^2. Cells
-beyond k + 2 are never used by cz3d.x (its top is at most cell k); they get the
+beyond k + 2 are never used by cztr3d.x (its top is at most cell k); they get the
 values of cell k + 2. z = r - R_sun.
 """
 import sys

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Horizontal kinetic energy budget per shell (budget_kh.dat of a cz3d.x run
+"""Horizontal kinetic energy budget per shell (budget_kh.dat of a cztr3d.x run
 with dt_budget > 0; the last record: mean rates in Lsun since t0).
 
 Usage: /usr/bin/python3 scripts/analyze_kh.py <run dir> [depth_max_km]

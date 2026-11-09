@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Mass exchange between up- and downflows in several runs (profiles with the
-<rho v_r>, <rho |v_r|> columns, written by cz3d.x since 2026-10-13): the mean
+<rho v_r>, <rho |v_r|> columns, written by cztr3d.x since 2026-10-13): the mean
 mass flux, the exchange rate, and the exchange times the entropy contrast
 4 pi r^2 <rho |v_r|> T rms(s1) (the scale of the enthalpy the exchange moves,
 in Lsun), against the total L of each run (its own relaxed profile file set).

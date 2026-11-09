@@ -1,11 +1,11 @@
 # CZ_3D: CZTR step 1 in 3D on ARBOR (Yin-Yang shell).
 #
 #   ./configure     once per machine (or after rebuilding ARBOR or eos_hhe elsewhere)
-#   make            build cz3d.x
+#   make            build cztr3d.x
 #   make data       generate the inputs that are not kept in the repository:
 #                   data/eos_table.bin (eos_hhe's eos_table_gen, data/eos_table.nml)
 #                   and data/static_init.dat (the static envelope, tools/static_bg.f90)
-#   make run        mpirun -np $(NP) ./cz3d.x runs/static.nml
+#   make run        mpirun -np $(NP) ./cztr3d.x runs/static.nml
 #   make smoke      the smoke test (runs/smoke.nml, 8 ranks)
 #   make clean
 #
@@ -13,7 +13,7 @@
 # eos_hhe's OpenMP build, checks that both use the same compiler, and writes
 # config.mk. The MPI wrapper and the optimization flags are ARBOR's (ARBOR_FC,
 # ARBOR_FFLAGS in its arbor.mk); this code adds only its own module directory,
-# OpenMP and line-length flags. Intel builds go to build-intel/, cz3d-intel.x.
+# OpenMP and line-length flags. Intel builds go to build-intel/, cztr3d-intel.x.
 
 CONFIG = config.mk
 -include $(CONFIG)

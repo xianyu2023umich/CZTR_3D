@@ -1,5 +1,5 @@
 #!/bin/bash
-# cz3d.x on Stampede3 (TACC), 4 SPR nodes x 112 ranks, 8 h jobs (a copy of
+# cztr3d.x on Stampede3 (TACC), 4 SPR nodes x 112 ranks, 8 h jobs (a copy of
 # tools/job.stampede3 for the 0.47 deg runs; chained jobs keep these settings).
 # Copy, edit the #SBATCH lines, submit from the
 # CZ_3D directory:

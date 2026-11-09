@@ -104,7 +104,7 @@ OMP       = $omp
 LONGLINES = $longlines
 moddir    = $moddir
 BUILD     = build$suffix
-EXE       = cz3d$suffix.x
+EXE       = cztr3d$suffix.x
 PYTHON    = $python
 # for batch jobs (tools/chain.slurm): the launcher and the modules loaded at configure time
 LAUNCHER  = $launcher

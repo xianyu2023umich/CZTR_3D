@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Overview of a cz3d.x run: time series from log.txt and horizontally
+"""Overview of a cztr3d.x run: time series from log.txt and horizontally
 averaged profiles (profile_NNNN.dat).
 
 Usage: /usr/bin/python3 scripts/plot_run.py <run dir> [out.png]

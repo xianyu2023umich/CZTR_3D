@@ -3,7 +3,7 @@ program cz3d_run
   ! 1D grid in r (whole columns or nb_r cells per block), the 1D state as the
   ! initial condition in every column. See cz3d_app_mod.
   !
-  ! Usage: mpirun -np N ./cz3d.x [run.nml]
+  ! Usage: mpirun -np N ./cztr3d.x [run.nml]
   use arbor
   use cz3d_params_mod
   use cz3d_bg_mod, only: bg_load, set_rsst, n_r, r_f, r_c, z_c, k_join, r_top_cz, xi, p0, rho0, T0, g_c, cs0, s0

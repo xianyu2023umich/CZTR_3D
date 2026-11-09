@@ -134,7 +134,7 @@ Intel MPI, whose `mpi_f08` module gfortran cannot read):
 ```bash
 cd EOS/eos_hhe && ./configure --fc=ifx && make omp       # build-omp-intel/
 make -C ARBOR install MODE=opt COMPILER=intel            # ARBOR/install/opt-intel
-cd CZ_3D && ./configure --arbor=../ARBOR/install/opt-intel && make   # build-intel/, cz3d-intel.x
+cd CZ_3D && ./configure --arbor=../ARBOR/install/opt-intel && make   # build-intel/, cztr3d-intel.x
 ```
 
 `make data` needs only one family (the generated inputs are the same files).
@@ -146,7 +146,7 @@ loads; configure in the environment the jobs should run in. Run with
 ## Running
 
 ```bash
-mpirun -np N ./cz3d.x runs/<case>.nml
+mpirun -np N ./cztr3d.x runs/<case>.nml
 ```
 
 Output goes to `out_dir`: `log.txt`, horizontally averaged profiles
@@ -167,7 +167,7 @@ blocks divisible by the ranks (72 blocks at 1.875 deg: 8, 9, 12, 18, 24).
 Start the run detached and kept awake:
 
 ```bash
-nohup caffeinate -is mpirun -np 8 ./cz3d.x runs/<case>.nml > output/<case>.out 2>&1 &
+nohup caffeinate -is mpirun -np 8 ./cztr3d.x runs/<case>.nml > output/<case>.out 2>&1 &
 disown
 ```
 
@@ -177,7 +177,7 @@ the last restart then). `disown`: the terminal can be closed. Status:
 
 ```bash
 tail -3 output/<case>/log.txt | cut -c1-150   # step, t, dt, Mach, |v_r|, |v_h|, L_top, L range
-pgrep -fl cz3d.x | head -2                    # still running?
+pgrep -fl cztr3d.x | head -2                    # still running?
 cat output/<case>/run_status.txt              # at the end: finished ...
 pmset -g log | grep -E " Sleep | Wake " | tail -3   # did the machine sleep?
 ```

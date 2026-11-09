@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """CZTR_3D init file: the CZ background plus an atmosphere to the top of the
-extended grid (tools/grid/extend_grid.py), in the format cz3d.x reads
+extended grid (tools/grid/extend_grid.py), in the format cztr3d.x reads
 ("n k", then 'i r z rho T v rho0 T0 g' for cells -1..n+2).
 
 Cells <= k (the CZ, k = the join cell of the CZ init file): state and

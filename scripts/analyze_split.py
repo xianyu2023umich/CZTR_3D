@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Where the hydro operator creates or destroys energy, split into the kinetic
-and the thermal energy equation (budget_split.dat of a cz3d.x run with
+and the thermal energy equation (budget_split.dat of a cztr3d.x run with
 dt_budget > 0; the last record, mean rates in Lsun since t0).
 
 Usage: /usr/bin/python3 scripts/analyze_split.py <run dir> [out.png]

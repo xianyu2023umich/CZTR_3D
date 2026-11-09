@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Horizontal flow structure on spherical shells (cz3d.x dump_shells files).
+"""Horizontal flow structure on spherical shells (cztr3d.x dump_shells files).
 
 Usage: /usr/bin/python3 scripts/analyze_shells.py <dump dir> [out.png]
 

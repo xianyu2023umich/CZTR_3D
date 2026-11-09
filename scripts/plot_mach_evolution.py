@@ -5,7 +5,7 @@ maps of both; the log's maxima against the step.
 
 Usage: /usr/bin/python3 scripts/plot_mach_evolution.py <run dir> [every n-th profile] [out.png]
 
-Needs out_dir/background.dat (c_s0, xi; written by cz3d.x at every start).
+Needs out_dir/background.dat (c_s0, xi; written by cztr3d.x at every start).
 rms |v| = sqrt(rms(v_r)^2 + rms(v_h)^2) of each profile; the background
 sound speed (the state's differs by its perturbation, small here).
 """

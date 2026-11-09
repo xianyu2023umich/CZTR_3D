@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Differential rotation and meridional flow from rotation_NNNN.dat files
-(cz3d.x with omega_rot /= 0): the mean over a range of profiles of
+(cztr3d.x with omega_rot /= 0): the mean over a range of profiles of
 Omega - Omega_0 [nHz] and <v_theta> on the meridional plane, Omega against
 radius at several latitudes, and the north-south symmetric part.
 

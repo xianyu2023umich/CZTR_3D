@@ -1,7 +1,7 @@
 program static_bg
   ! The static CZ envelope (CZ/srcFortran: hydrostatic + MLT + radiative
   ! diffusion, integrated down from tau = 0.01 at R_sun) as a background for
-  ! cz3d.x, deeper than CZ's own output: alpha is found exactly as CZ's
+  ! cztr3d.x, deeper than CZ's own output: alpha is found exactly as CZ's
   ! main.f90 does (shooting to the deep-CZ entropy target at P = 6e13 with
   ! eos_hhe), then the envelope is integrated once more with that alpha down
   ! to p_deep, below the 3D grid's bottom ghost cells.
