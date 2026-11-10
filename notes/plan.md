@@ -128,3 +128,22 @@ visuals first, convergence studies later. 0.234 deg only after it works.
   flows up to ~50 km/s (Mach 0.3) from the non-equilibrium 1.5 MK start,
   rms_h(s1) growing to ~8e5 then flat and horizontal flows ~200 m/s: to
   locate (profiles). Run on the Studio / plugged in: tests take >10 min.
+- 2026-11-10: 3D wind relaxation (runs/wind3d_relax.nml, Studio, 1.875 deg,
+  20000 LTS steps, 7.8 h on 8 ranks): steady from ~10000 steps (rho v r^2
+  flat to +-0.3% above 1.1 R), still spherically symmetric (rms v_r =
+  |<v_r>|, horizontal s1 variation <= 2e-4 of the mean, v_h <= 65 m/s).
+  It settles to a different steady state than CZTR_2D's 1D wind: 457 vs 600
+  km/s at 20 R, sonic point 4.0 vs 3.0 R, n v at 1 AU 3.4e8 vs 2.7e8, T at
+  3-5 R 2.3 vs 3.3 MK, base density x2.5, low-corona pressure x2.
+  KNOWN ISSUE (kept for now, the user: "not that serious"): the cause is the
+  port's choice to stop the grey radiation at the photosphere. In CZTR_2D the
+  grey solve continues through the (grey-opaque) chromosphere and heats it;
+  in 3D only the thin losses act there, so the low chromosphere (0.2-0.5 Mm)
+  cools to T_floor (4400 K, vs 4500-4700 K in 1D), the chromosphere
+  restructures, the TR pressure rises and more mass evaporates (Hansteen &
+  Leer: the TR pressure sets the mass flux): a denser, cooler, slower wind.
+  The 3D wind is arguably closer to the slow wind, and CZTR_2D double counts
+  the chromospheric radiation (grey + C&L). Fix later if needed: optically
+  thin absorption Q = 4 pi kappa rho (J - B(T)) with J the diluted
+  photospheric radiation (no implicit solve across blocks).
+
