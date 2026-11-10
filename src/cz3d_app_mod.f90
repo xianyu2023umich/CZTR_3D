@@ -2937,25 +2937,28 @@ contains
     character(len=300) :: name
     real(dp), allocatable :: P_GVB(:,:,:,:,:)
     real(dp) :: out(n_field), rhop
-    integer :: jb, ib, i, j, k
-    ! rho1, v_r, v_theta, v_phi, s1, T - T0, then rho, T and the Mach number
-    ! |v|/c_s (cell centres); with B also B_r, B_theta, B_phi
+    integer :: jb, ib, i, j, k, o
+    ! rho1, v_r, v_theta, v_phi, s1, [B_r, B_theta, B_phi,] T - T0, rho, T
+    ! and the Mach number |v|/c_s (cell centres). The vectors must keep their
+    ! state slots (v at vr_, B at br_): ARBOR rotates those slots between the
+    ! Yin-Yang frames when it fills the ghosts the node values are built from
     allocate(P_GVB(1-ng:nb(1)+ng, 1-ng:nb(2)+ng, 1-ng:nb(3)+ng, merge(12, 9, use_B), nBlockMax))
     P_GVB = 0.0_dp
     do jb = 1, nBlock
       ib = iBlockList_I(jb)
       call cz_bind(ib)
       P_GVB(:, :, :, 1:5, ib) = State_GVB(:, :, :, 1:5, ib)
-      if (use_B) P_GVB(:, :, :, 10:12, ib) = State_GVB(:, :, :, br_:bp_, ib)
+      if (use_B) P_GVB(:, :, :, br_:bp_, ib) = State_GVB(:, :, :, br_:bp_, ib)
+      o = merge(3, 0, use_B)                                ! the scalars after the field
       do k = 1, nb(3)
         do j = 1, nb(2)
           do i = 1, nb(1)
             rhop = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
             call eos_eval(tab, rhop, s0(i) + State_GVB(i, j, k, s1_, ib), out)
-            P_GVB(i, j, k, 6, ib) = exp(out(F_LNT)) - T0(i)
-            P_GVB(i, j, k, 7, ib) = rhop
-            P_GVB(i, j, k, 8, ib) = exp(out(F_LNT))
-            P_GVB(i, j, k, 9, ib) = norm2(State_GVB(i, j, k, vr_:vp_, ib))/sqrt(out(F_GAMMA1)*exp(out(F_LNP))/rhop)
+            P_GVB(i, j, k, o+6, ib) = exp(out(F_LNT)) - T0(i)
+            P_GVB(i, j, k, o+7, ib) = rhop
+            P_GVB(i, j, k, o+8, ib) = exp(out(F_LNT))
+            P_GVB(i, j, k, o+9, ib) = norm2(State_GVB(i, j, k, vr_:vp_, ib))/sqrt(out(F_GAMMA1)*exp(out(F_LNP))/rhop)
           end do
         end do
       end do
@@ -2963,8 +2966,8 @@ contains
     call cz_unbind()
     write(name, '(A,A,I8.8,A)') trim(out_dir), '/plot_', iStep, '.plt'
     if (use_B) then
-      call arbor_plot_tecplot(dom, name, P_GVB, names=['rho1', 'vr  ', 'vth ', 'vph ', 's1  ', 'T1  ', 'rho ', 'T   ', 'Mach', &
-          'Br  ', 'Bth ', 'Bph '], t=t, title='cztr3d')
+      call arbor_plot_tecplot(dom, name, P_GVB, names=['rho1', 'vr  ', 'vth ', 'vph ', 's1  ', 'Br  ', 'Bth ', 'Bph ', &
+          'T1  ', 'rho ', 'T   ', 'Mach'], t=t, title='cztr3d')
     else
       call arbor_plot_tecplot(dom, name, P_GVB, names=['rho1', 'vr  ', 'vth ', 'vph ', 's1  ', 'T1  ', 'rho ', 'T   ', 'Mach'], &
           t=t, title='cztr3d')
