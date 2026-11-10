@@ -2928,37 +2928,50 @@ contains
     end if
   end subroutine max_mach_report
 
-  ! Tecplot file of the state in out_dir
+  ! Tecplot file of the state in out_dir: rho1, v_x, v_y, v_z, s1, [B_x, B_y,
+  ! B_z,] T - T0, rho, T and the Mach number |v|/c_s (cell centres; ARBOR
+  ! writes node values). The vectors as Cartesian components in the global
+  ! (Yin) frame, the frame of the X, Y, Z coordinates (Yang's rotated into it).
+  ! The plot quantities sit in slots beyond 8 and only those are passed to the
+  ! writer: its ghost fill then treats them as scalars (it rotates the slots
+  ! declared as spherical vectors, v at vr_ and B at br_, which hold nothing here)
   subroutine cz_write_plot(self, dom, iStep, t)
     class(cz3d_app_t), intent(inout) :: self
     type(arbor_domain_t), intent(in) :: dom
     integer, intent(in) :: iStep
     real(dp), intent(in) :: t
+    integer, parameter :: o = 8
     character(len=300) :: name
     real(dp), allocatable :: P_GVB(:,:,:,:,:)
-    real(dp) :: out(n_field), rhop
-    integer :: jb, ib, i, j, k, o
-    ! rho1, v_r, v_theta, v_phi, s1, [B_r, B_theta, B_phi,] T - T0, rho, T
-    ! and the Mach number |v|/c_s (cell centres). The vectors must keep their
-    ! state slots (v at vr_, B at br_): ARBOR rotates those slots between the
-    ! Yin-Yang frames when it fills the ghosts the node values are built from
-    allocate(P_GVB(1-ng:nb(1)+ng, 1-ng:nb(2)+ng, 1-ng:nb(3)+ng, merge(12, 9, use_B), nBlockMax))
+    real(dp) :: out(n_field), rhop, e(3,3), vc(3), bc(3)
+    integer :: jb, ib, i, j, k, n, q
+    n = merge(12, 9, use_B)
+    allocate(P_GVB(1-ng:nb(1)+ng, 1-ng:nb(2)+ng, 1-ng:nb(3)+ng, o + n, nBlockMax))
     P_GVB = 0.0_dp
+    q = merge(3, 0, use_B)                                ! the scalars after the field
     do jb = 1, nBlock
       ib = iBlockList_I(jb)
       call cz_bind(ib)
-      P_GVB(:, :, :, 1:5, ib) = State_GVB(:, :, :, 1:5, ib)
-      if (use_B) P_GVB(:, :, :, br_:bp_, ib) = State_GVB(:, :, :, br_:bp_, ib)
-      o = merge(3, 0, use_B)                                ! the scalars after the field
       do k = 1, nb(3)
         do j = 1, nb(2)
+          e = sph_basis(Metric_DB(2, ib)%X_I(j), Metric_DB(3, ib)%X_I(k))
           do i = 1, nb(1)
+            vc = matmul(e, State_GVB(i, j, k, vr_:vp_, ib))  ! Cartesian in the patch frame
+            if (Key_IB(KP, ib) == 2) vc = yy_cart(vc)       ! Yang -> the global frame
+            P_GVB(i, j, k, o+1, ib) = State_GVB(i, j, k, rho1_, ib)
+            P_GVB(i, j, k, o+2:o+4, ib) = vc
+            P_GVB(i, j, k, o+5, ib) = State_GVB(i, j, k, s1_, ib)
+            if (use_B) then
+              bc = matmul(e, State_GVB(i, j, k, br_:bp_, ib))
+              if (Key_IB(KP, ib) == 2) bc = yy_cart(bc)
+              P_GVB(i, j, k, o+6:o+8, ib) = bc
+            end if
             rhop = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
             call eos_eval(tab, rhop, s0(i) + State_GVB(i, j, k, s1_, ib), out)
-            P_GVB(i, j, k, o+6, ib) = exp(out(F_LNT)) - T0(i)
-            P_GVB(i, j, k, o+7, ib) = rhop
-            P_GVB(i, j, k, o+8, ib) = exp(out(F_LNT))
-            P_GVB(i, j, k, o+9, ib) = norm2(State_GVB(i, j, k, vr_:vp_, ib))/sqrt(out(F_GAMMA1)*exp(out(F_LNP))/rhop)
+            P_GVB(i, j, k, o+q+6, ib) = exp(out(F_LNT)) - T0(i)
+            P_GVB(i, j, k, o+q+7, ib) = rhop
+            P_GVB(i, j, k, o+q+8, ib) = exp(out(F_LNT))
+            P_GVB(i, j, k, o+q+9, ib) = norm2(State_GVB(i, j, k, vr_:vp_, ib))/sqrt(out(F_GAMMA1)*exp(out(F_LNP))/rhop)
           end do
         end do
       end do
@@ -2966,11 +2979,11 @@ contains
     call cz_unbind()
     write(name, '(A,A,I8.8,A)') trim(out_dir), '/plot_', iStep, '.plt'
     if (use_B) then
-      call arbor_plot_tecplot(dom, name, P_GVB, names=['rho1', 'vr  ', 'vth ', 'vph ', 's1  ', 'Br  ', 'Bth ', 'Bph ', &
-          'T1  ', 'rho ', 'T   ', 'Mach'], t=t, title='cztr3d')
+      call arbor_plot_tecplot(dom, name, P_GVB, iVarMin=o+1, iVarMax=o+n, names=['rho1', 'vx  ', 'vy  ', 'vz  ', &
+          's1  ', 'Bx  ', 'By  ', 'Bz  ', 'T1  ', 'rho ', 'T   ', 'Mach'], t=t, title='cztr3d')
     else
-      call arbor_plot_tecplot(dom, name, P_GVB, names=['rho1', 'vr  ', 'vth ', 'vph ', 's1  ', 'T1  ', 'rho ', 'T   ', 'Mach'], &
-          t=t, title='cztr3d')
+      call arbor_plot_tecplot(dom, name, P_GVB, iVarMin=o+1, iVarMax=o+n, names=['rho1', 'vx  ', 'vy  ', 'vz  ', &
+          's1  ', 'T1  ', 'rho ', 'T   ', 'Mach'], t=t, title='cztr3d')
     end if
   end subroutine cz_write_plot
 
