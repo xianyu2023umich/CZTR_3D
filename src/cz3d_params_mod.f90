@@ -68,6 +68,8 @@ module cz3d_params_mod
   integer  :: n_step_max = huge(1)
   integer  :: n_log = 100                 ! log line every n_log steps
   real(dp) :: dt_prof = 600.0_dp          ! horizontally averaged profile every dt_prof s (0 = none)
+  ! plot_at_end: one Tecplot file at the end of the run as well (e.g. a zero-step run from a restart)
+  logical  :: plot_at_end = .false.
   real(dp) :: plot_dt = 0.0_dp            ! Tecplot file of the state every plot_dt s (0 = none)
   ! restart files out_dir/restart_NNNNNNNN.rst every restart_dt s (0 = none);
   ! restart_from: continue from that file (log.txt is appended to). The
@@ -312,7 +314,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &

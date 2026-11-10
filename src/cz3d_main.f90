@@ -216,6 +216,9 @@ program cz3d_run
     end do
   end if
   wall = arbor_wtime() - wall
+  ! the largest Mach number's cell (stderr), and a plot at the end if asked
+  call max_mach_report(i_step + n_step, t)
+  if (plot_at_end) call app%write_plot(dom, i_step + n_step, t)
   ! a restart file at the end too (unless the schedule just wrote one), so a
   ! run can always be continued from where it stopped; always when stopped
   ! for the wall time

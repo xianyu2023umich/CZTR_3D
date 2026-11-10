@@ -157,7 +157,7 @@ module cz3d_app_mod
   integer, parameter :: nAcc = 18
   real(dp), allocatable :: bgf_r(:)
 
-  public :: cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
+  public :: max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
 
 contains
 
@@ -2878,6 +2878,56 @@ contains
     c = arbor_sum(c)
   end function state_checksum
 
+  ! The cell of the largest Mach number |v|/c_s: printed (radius, global
+  ! latitude and longitude, z, T, rho, v_r, v_h, c_s, |B|) by the rank that holds it
+  subroutine max_mach_report(iStep, t)
+    integer, intent(in) :: iStep
+    real(dp), intent(in) :: t
+    real(dp) :: out(n_field), rhop, cs, m, mbest, gbest, e(3,3), x(3), loc(8)
+    integer :: jb, ib, i, j, k
+    character(len=400) :: msg
+    mbest = -1.0_dp
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          do i = 1, nb(1)
+            rhop = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            call eos_eval(tab, rhop, s0(i) + State_GVB(i, j, k, s1_, ib), out)
+            cs = sqrt(out(F_GAMMA1)*exp(out(F_LNP))/rhop)
+            m = norm2(State_GVB(i, j, k, vr_:vp_, ib))/cs
+            if (m > mbest) then
+              mbest = m
+              e = sph_basis(Metric_DB(2, ib)%X_I(j), Metric_DB(3, ib)%X_I(k))
+              x = e(:, 1)
+              if (Key_IB(KP, ib) == 2) x = yy_cart(x)
+              loc = [r_c(i), asin(max(-1.0_dp, min(1.0_dp, x(3))))*180.0_dp/pi, atan2(x(2), x(1))*180.0_dp/pi, &
+                  exp(out(F_LNT)), rhop, State_GVB(i, j, k, vr_, ib), hypot(State_GVB(i, j, k, vt_, ib), &
+                  State_GVB(i, j, k, vp_, ib)), cs]
+              if (use_B) then
+                write(msg, '(A,F9.4,A,F7.2,A,F8.2,A,F10.1,A,ES10.3,A,ES10.3,A,2F9.2,A,F8.2,A,F9.2,A)') 'max Mach: r/R ', &
+                    loc(1)/6.957e10_dp, '  lat ', loc(2), '  lon ', loc(3), '  z[km] ', z_c(i)/1.0e5_dp, '  T ', loc(4), &
+                    '  rho ', loc(5), '  v_r, v_h [km/s] ', loc(6)/1.0e5_dp, loc(7)/1.0e5_dp, '  c_s ', loc(8)/1.0e5_dp, &
+                    '  |B| [G] ', norm2(State_GVB(i, j, k, br_:bp_, ib)), ''
+              else
+                write(msg, '(A,F9.4,A,F7.2,A,F8.2,A,F10.1,A,ES10.3,A,ES10.3,A,2F9.2,A,F8.2)') 'max Mach: r/R ', &
+                    loc(1)/6.957e10_dp, '  lat ', loc(2), '  lon ', loc(3), '  z[km] ', z_c(i)/1.0e5_dp, '  T ', loc(4), &
+                    '  rho ', loc(5), '  v_r, v_h [km/s] ', loc(6)/1.0e5_dp, loc(7)/1.0e5_dp, '  c_s ', loc(8)/1.0e5_dp
+              end if
+            end if
+          end do
+        end do
+      end do
+    end do
+    call cz_unbind()
+    gbest = arbor_max(mbest)
+    if (mbest == gbest) then
+      write(0, '(A,I0,A,ES12.5,A,F8.2,A,A)') 'step ', iStep, '  t ', t, '  Mach ', mbest, '  ', trim(msg)
+      flush(0)
+    end if
+  end subroutine max_mach_report
+
   ! Tecplot file of the state in out_dir
   subroutine cz_write_plot(self, dom, iStep, t)
     class(cz3d_app_t), intent(inout) :: self
@@ -2886,21 +2936,26 @@ contains
     real(dp), intent(in) :: t
     character(len=300) :: name
     real(dp), allocatable :: P_GVB(:,:,:,:,:)
-    real(dp) :: out(n_field)
+    real(dp) :: out(n_field), rhop
     integer :: jb, ib, i, j, k
-    ! rho1, v_r, v_theta, v_phi, s1 and T - T0 (cell centres); with B also B_r, B_theta, B_phi
-    allocate(P_GVB(1-ng:nb(1)+ng, 1-ng:nb(2)+ng, 1-ng:nb(3)+ng, merge(9, 6, use_B), nBlockMax))
+    ! rho1, v_r, v_theta, v_phi, s1, T - T0, then rho, T and the Mach number
+    ! |v|/c_s (cell centres); with B also B_r, B_theta, B_phi
+    allocate(P_GVB(1-ng:nb(1)+ng, 1-ng:nb(2)+ng, 1-ng:nb(3)+ng, merge(12, 9, use_B), nBlockMax))
     P_GVB = 0.0_dp
     do jb = 1, nBlock
       ib = iBlockList_I(jb)
       call cz_bind(ib)
       P_GVB(:, :, :, 1:5, ib) = State_GVB(:, :, :, 1:5, ib)
-      if (use_B) P_GVB(:, :, :, 7:9, ib) = State_GVB(:, :, :, br_:bp_, ib)
+      if (use_B) P_GVB(:, :, :, 10:12, ib) = State_GVB(:, :, :, br_:bp_, ib)
       do k = 1, nb(3)
         do j = 1, nb(2)
           do i = 1, nb(1)
-            call eos_eval(tab, rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib), s0(i) + State_GVB(i, j, k, s1_, ib), out)
+            rhop = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            call eos_eval(tab, rhop, s0(i) + State_GVB(i, j, k, s1_, ib), out)
             P_GVB(i, j, k, 6, ib) = exp(out(F_LNT)) - T0(i)
+            P_GVB(i, j, k, 7, ib) = rhop
+            P_GVB(i, j, k, 8, ib) = exp(out(F_LNT))
+            P_GVB(i, j, k, 9, ib) = norm2(State_GVB(i, j, k, vr_:vp_, ib))/sqrt(out(F_GAMMA1)*exp(out(F_LNP))/rhop)
           end do
         end do
       end do
@@ -2908,10 +2963,11 @@ contains
     call cz_unbind()
     write(name, '(A,A,I8.8,A)') trim(out_dir), '/plot_', iStep, '.plt'
     if (use_B) then
-      call arbor_plot_tecplot(dom, name, P_GVB, names=['rho1', 'vr  ', 'vth ', 'vph ', 's1  ', 'T1  ', 'Br  ', 'Bth ', 'Bph '], &
-          t=t, title='cz3d')
+      call arbor_plot_tecplot(dom, name, P_GVB, names=['rho1', 'vr  ', 'vth ', 'vph ', 's1  ', 'T1  ', 'rho ', 'T   ', 'Mach', &
+          'Br  ', 'Bth ', 'Bph '], t=t, title='cztr3d')
     else
-      call arbor_plot_tecplot(dom, name, P_GVB, names=['rho1', 'vr  ', 'vth ', 'vph ', 's1  ', 'T1  '], t=t, title='cz3d')
+      call arbor_plot_tecplot(dom, name, P_GVB, names=['rho1', 'vr  ', 'vth ', 'vph ', 's1  ', 'T1  ', 'rho ', 'T   ', 'Mach'], &
+          t=t, title='cztr3d')
     end if
   end subroutine cz_write_plot
 

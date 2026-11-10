@@ -1,0 +1,35 @@
+! A Tecplot file (and the max-Mach cell on stderr) from a restart of
+! runs/wind3d_dipole.nml: zero steps, plot_at_end. Variables: rho1, v_r,
+! v_theta, v_phi, s1, T - T0, rho, T, Mach (|v|/c_s), B_r, B_theta, B_phi
+! (cell centres; ARBOR writes node values). ~0.9 GB at 1.875 deg with 560
+! radial cells. The field is in the restart: no new seed. Set restart_from.
+!   mpirun -n 8 ./cztr3d.x runs/wind3d_dipole_plot.nml 2> max_mach.txt
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  restart_from = 'output/wind3d_dipole/restart_XXXXXXXX.rst'   ! (the restart you got)
+  restart_new_output = .true.
+  out_dir = 'output/wind3d_dipole_plot'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, nb_r = 28
+  use_atmosphere = .true., freeze_cz = .true.
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'dipole', b_seed_G = 5.0, b_seed_rss_rsun = 2.5
+  b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  va_dt_target = 0.3, va_floor_cs = 1.5
+  cond_along_b = .true., b_iso_G = 1.0e-3
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11
+  dt1 = 20.0
+  t_end = 1.0e9, n_step_max = 0, dt_max = 20.0
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 0.0
+  wall_check_steps = 20
+  plot_at_end = .true.
+/
