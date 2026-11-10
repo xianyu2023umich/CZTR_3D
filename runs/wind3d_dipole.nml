@@ -1,0 +1,43 @@
+! The relaxed 3D solar wind (runs/wind3d_relax.nml, 1.875 deg, frozen CZ)
+! with a dipole field added at the restart: the l = 1 potential field with a
+! source surface at 2.5 R_sun (radial above), 5 G at the poles at the
+! photosphere. New atmosphere physics: the Alfven cap from a target step
+! (va_dt_target 0.3 s, at least 1.5 c_s in the atmosphere), conduction along
+! the field, the heating ~ |B| (Downs 2010: 4e-5 erg cm^-3 s^-1 G^-1, 40 Mm,
+! gated at n_e = 2e11 cm^-3) on top of CZTR's heating + the extended term.
+! Expected: a helmet streamer over the equator (closed loops at low
+! latitudes, the wind from the polar coronal holes), the field above r_ss
+! evening out |B_r| (it starts B_r ~ cos(theta), not force free). Local time
+! stepping dt1 = 20 s (relaxation; the outer step factors reach ~160 with
+! the field's 0.13 s global step: if it goes unstable, switch to multirate).
+! Set restart_from to wind3d_relax's last restart. ~1.5 s per step on 8
+! cores: 20000 steps ~9 h. Profiles every 200 steps, restarts every ~600 s.
+!   mpirun -n 8 ./cztr3d.x runs/wind3d_dipole.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  restart_from = 'output/wind3d_relax/restart_00020000.rst'
+  restart_new_output = .true.
+  out_dir = 'output/wind3d_dipole'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, nb_r = 28
+  use_atmosphere = .true., freeze_cz = .true.
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'dipole', b_seed_G = 5.0, b_seed_rss_rsun = 2.5
+  b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  va_dt_target = 0.3, va_floor_cs = 1.5
+  cond_along_b = .true., b_iso_G = 1.0e-3
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11
+  dt1 = 20.0
+  t_end = 1.0e9, n_step_max = 20000, dt_max = 20.0
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 600.0
+  wall_check_steps = 20
+/

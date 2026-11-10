@@ -33,7 +33,7 @@ module cztr3d_atm_mod
 
   real(dp), parameter :: kappa0_spitzer = 7.8e-7_dp, T_SWITCH = 2.4e4_dp, T_SWITCH_WIDTH = 3.0e3_dp
   real(dp), parameter :: Rsun_atm = 6.957e10_dp, kB_atm = 1.380649e-16_dp
-  integer, parameter :: RHO1 = 1, VR = 2, VT = 3, VP = 4, S1 = 5
+  integer, parameter :: RHO1 = 1, VR = 2, VT = 3, VP = 4, S1 = 5, BR = 6, BT = 7, BP = 8
 
   type(species_table_t) :: h1_tab, ca2_tab, mg2_tab
   type(coronal_table_t) :: coronal_tab
@@ -137,12 +137,13 @@ contains
     real(dp), intent(in) :: dt_in
     logical, intent(in) :: at_bot, at_top
     real(dp), intent(in) :: stf(0:)
-    real(dp) :: Tf, rf, Tg, csf, cvf, dxf, vf, x, dQ, Sc, Sf, sth, dt, fS, qcl
+    real(dp) :: Tf, rf, Tg, csf, cvf, dxf, vf, x, dQ, Sc, Sf, sth, dt, fS, qcl, gt(3), bf(3), aniso
     real(dp) :: colH(nb(1)), dr, qd, ionH, lT, w, nHt, QH, iH, QCa, iCa, QMg, iMg, chromo, coron, Qheat, Qlos, colm
     integer :: i, j, k, m
     m = nb(1)
     if (maxval(atm_switch(z_c(1:m))) < 1.0e-8_dp .and. atm_switch(r_f(m) - r_top_cz) < 1.0e-8_dp) return  ! (deep CZ block)
     call states(ib)
+    aniso = merge(1.0_dp, 0.0_dp, cond_along_b .and. use_B)
     associate (X2 => Metric_DB(2, ib)%X_I, X3 => Metric_DB(3, ib)%X_I)
     if (use_conduction) then
       F1 = 0.0_dp;  F2 = 0.0_dp;  F3 = 0.0_dp
@@ -168,6 +169,16 @@ contains
             csf = 0.5_dp*(cs_A(i, j, k) + cs_A(i+1, j, k))
             cvf = 0.5_dp*(cv_A(i, j, k) + cv_A(i+1, j, k))
             Tg = (T_A(i+1, j, k) - T_A(i, j, k))/dxf
+            if (aniso > 0.0_dp) then
+              ! along the field: the face's (r, theta, phi) gradient (tangential
+              ! parts from its interior cells' central differences)
+              gt = 0.0_dp;  x = 0.0_dp
+              if (i >= 1) then;  gt = gt + grad_cell(i, j, k);  x = x + 1.0_dp;  end if
+              if (i + 1 <= m) then;  gt = gt + grad_cell(i+1, j, k);  x = x + 1.0_dp;  end if
+              gt = gt/max(x, 1.0_dp);  gt(1) = Tg
+              bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i+1, j, k, BR:BP, ib))
+              Tg = along_b(gt, bf, 1)
+            end if
             vf = 0.5_dp*abs(State_GVB(i, j, k, VR, ib) + State_GVB(i+1, j, k, VR, ib))
             fS = 1.0_dp;  qcl = 0.0_dp
             if (cond_r_rsun > 0.0_dp) then
@@ -195,6 +206,14 @@ contains
             csf = 0.5_dp*(cs_A(i, j, k) + cs_A(i, j+1, k))
             cvf = 0.5_dp*(cv_A(i, j, k) + cv_A(i, j+1, k))
             Tg = (T_A(i, j+1, k) - T_A(i, j, k))/(r_c(i)*dxf)
+            if (aniso > 0.0_dp) then
+              gt = 0.0_dp;  x = 0.0_dp
+              if (j >= 1) then;  gt = gt + grad_cell(i, j, k);  x = x + 1.0_dp;  end if
+              if (j + 1 <= nb(2)) then;  gt = gt + grad_cell(i, j+1, k);  x = x + 1.0_dp;  end if
+              gt = gt/max(x, 1.0_dp);  gt(2) = Tg
+              bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i, j+1, k, BR:BP, ib))
+              Tg = along_b(gt, bf, 2)
+            end if
             vf = 0.5_dp*abs(State_GVB(i, j, k, VT, ib) + State_GVB(i, j+1, k, VT, ib))
             fS = 1.0_dp
             if (cond_r_rsun > 0.0_dp) fS = 1.0_dp/(1.0_dp + (r_c(i)/(cond_r_rsun*Rsun_atm))**2)
@@ -220,6 +239,14 @@ contains
             csf = 0.5_dp*(cs_A(i, j, k) + cs_A(i, j, k+1))
             cvf = 0.5_dp*(cv_A(i, j, k) + cv_A(i, j, k+1))
             Tg = (T_A(i, j, k+1) - T_A(i, j, k))/(r_c(i)*sth*dxf)
+            if (aniso > 0.0_dp) then
+              gt = 0.0_dp;  x = 0.0_dp
+              if (k >= 1) then;  gt = gt + grad_cell(i, j, k);  x = x + 1.0_dp;  end if
+              if (k + 1 <= nb(3)) then;  gt = gt + grad_cell(i, j, k+1);  x = x + 1.0_dp;  end if
+              gt = gt/max(x, 1.0_dp);  gt(3) = Tg
+              bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i, j, k+1, BR:BP, ib))
+              Tg = along_b(gt, bf, 3)
+            end if
             vf = 0.5_dp*abs(State_GVB(i, j, k, VP, ib) + State_GVB(i, j, k+1, VP, ib))
             fS = 1.0_dp
             if (cond_r_rsun > 0.0_dp) fS = 1.0_dp/(1.0_dp + (r_c(i)/(cond_r_rsun*Rsun_atm))**2)
@@ -287,6 +314,8 @@ contains
               Qheat = Sc*H_peak*x*exp(1.0_dp - x)
               if (H_c > 0.0_dp) Qheat = Qheat + Sc*H_c*exp(-max(z_c(i), 0.0_dp)/(lambda_c_km*1.0e5_dp))
               if (H_ext > 0.0_dp) Qheat = Qheat + Sc*H_ext*exp(-max(z_c(i), 0.0_dp)/(lambda_ext_rsun*Rsun_atm))
+              if (H_B > 0.0_dp .and. use_B) Qheat = Qheat + Sc*H_B*norm2(State_GVB(i, j, k, BR:BP, ib)) &
+                  *exp(-max(z_c(i), 0.0_dp)/(lambda_B_km*1.0e5_dp))/(1.0_dp + (ne_A(i, j, k)/n_gate)**4)
             end if
           end if
           Qloss_B(i, j, k, ib) = Qlos
@@ -297,6 +326,30 @@ contains
     end associate
 
   contains
+
+    ! The (r, theta, phi) gradient of T at interior cell (i, j, k) of the block
+    ! (central differences; the ghost layers next to the interior are filled)
+    function grad_cell(i, j, k) result(g)
+      integer, intent(in) :: i, j, k
+      real(dp) :: g(3)
+      associate (Y2 => Metric_DB(2, ib)%X_I, Y3 => Metric_DB(3, ib)%X_I)
+        g(1) = (T_A(i+1, j, k) - T_A(i-1, j, k))/(r_c(i+1) - r_c(i-1))
+        g(2) = (T_A(i, j+1, k) - T_A(i, j-1, k))/(r_c(i)*(Y2(j+1) - Y2(j-1)))
+        g(3) = (T_A(i, j, k+1) - T_A(i, j, k-1))/(r_c(i)*sin(Y2(j))*(Y3(k+1) - Y3(k-1)))
+      end associate
+    end function grad_cell
+
+    ! The gradient that drives the face flux along direction d: w b_d (b.g) +
+    ! (1 - w) g_d, b = B/|B|, w = B^2/(B^2 + b_iso_G^2) (cond_along_b)
+    real(dp) function along_b(g, bv, d) result(gd)
+      real(dp), intent(in) :: g(3), bv(3)
+      integer, intent(in) :: d
+      real(dp) :: b2, w
+      b2 = sum(bv**2)
+      w = b2/(b2 + b_iso_G**2)
+      gd = (1.0_dp - w)*g(d)
+      if (b2 > 0.0_dp) gd = gd + w*bv(d)*dot_product(bv, g)/b2
+    end function along_b
 
     ! CZTR's hyperbolic face flux: target -fsat k0 T^2.5 dT/dx, relaxed;
     ! fS: the Spitzer weight, qcl: the collisionless flux (weight 1 - fS)

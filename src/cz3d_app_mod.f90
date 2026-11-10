@@ -23,7 +23,7 @@ module cz3d_app_mod
   use cz3d_bg_mod, only: k_join, n_r, n_c, bg_view, r_c, r_f, drdxi_c, rho0, s0, p0, lnp0, g_c, z_c, ds0dr, rho1_init, s1_init, &
       v_init, tab, area_f, xi, T0, ddr_c, cs0, vol_c, r_top_cz
   use cz3d_transport_mod, only: transport_column, cool_f, cool_c, grey_i0, tr_view, col_bottom, col_top
-  use cztr3d_atm_mod, only: atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce
+  use cztr3d_atm_mod, only: atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce, atm_switch
   use eos_types, only: eos_state
   use eos_thermo, only: eos_get_from_rho_T
   use const_mod, only: Lsun
@@ -352,6 +352,7 @@ contains
     end do
     if (len_trim(import_dir) > 0) call import_block(iBlock)
     if (use_B .and. b_seed == 'toroidal') call seed_toroidal(iBlock)
+    if (use_B .and. b_seed == 'dipole') call seed_dipole(iBlock)
     call cz_unbind()
   end subroutine cz_init_block
 
@@ -388,6 +389,47 @@ contains
     end do
   end subroutine seed_toroidal
 
+  ! Dipole seed (b_seed = 'dipole'): the l = 1 potential field about the
+  ! global z axis with a source surface at r_ss = b_seed_rss_rsun, Phi = A
+  ! cos(theta) [(r_ss/r)^2 - r/r_ss]: B_r = A cos(theta) (2 r_ss^2/r^3 +
+  ! 1/r_ss), B_theta = A sin(theta) (r_ss^2/r^3 - 1/r_ss) (0 at r_ss); above r_ss
+  ! radial, B_r(r_ss, theta) (r_ss/r)^2; A from b_seed_G = B_r at the pole at
+  ! r_top_cz. Added to the block's field (theta: the global colatitude)
+  subroutine seed_dipole(iBlock)
+    use const_mod, only: Rsun
+    integer, intent(in) :: iBlock
+    real(dp) :: e(3,3), x(3), bg(3), bl(3), rss, A, ct, st, r, br, bth, rr, thg(3)
+    integer :: i, j, k
+    rss = b_seed_rss_rsun*Rsun
+    A = b_seed_G/(2.0_dp*rss**2/r_top_cz**3 + 1.0_dp/rss)
+    do k = 1, nb(3)
+      do j = 1, nb(2)
+        e = sph_basis(Metric_DB(2, iBlock)%X_I(j), Metric_DB(3, iBlock)%X_I(k))
+        x = e(:, 1)
+        if (Key_IB(KP, iBlock) == 2) x = yy_cart(x)          ! the position in the global frame
+        ct = x(3)
+        st = sqrt(max(1.0_dp - ct*ct, 0.0_dp))
+        thg = [0.0_dp, 0.0_dp, -1.0_dp]                       ! e_theta of the global frame (at the poles: any)
+        if (st > 1.0e-12_dp) thg = [ct*x(1)/st, ct*x(2)/st, -st]
+        do i = 1, nb(1)
+          r = r_c(i)
+          if (r <= rss) then
+            br = A*ct*(2.0_dp*rss**2/r**3 + 1.0_dp/rss)
+            bth = A*st*(rss**2/r**3 - 1.0_dp/rss)
+          else
+            rr = rss/r
+            br = A*ct*3.0_dp/rss*rr**2
+            bth = 0.0_dp
+          end if
+          bg = br*x + bth*thg                                 ! global Cartesian
+          if (Key_IB(KP, iBlock) == 2) bg = yy_cart(bg)      ! to this patch's frame
+          bl = matmul(transpose(e), bg)
+          State_GVB(i, j, k, br_:bp_, iBlock) = State_GVB(i, j, k, br_:bp_, iBlock) + bl
+        end do
+      end do
+    end do
+  end subroutine seed_dipole
+
   ! A hydrodynamic restart read into an MHD run (arbor_restart_read with
   ! n_var_file < nv): B and psi came back zero; add the seed field to every
   ! block (init_block is not called on a restart)
@@ -399,6 +441,7 @@ contains
       call cz_bind(iBlockList_I(jb))
       State_GVB(:, :, :, br_:psi_, iBlockList_I(jb)) = 0.0_dp
       if (b_seed == 'toroidal') call seed_toroidal(iBlockList_I(jb))
+      if (b_seed == 'dipole') call seed_dipole(iBlockList_I(jb))
     end do
     call cz_unbind()
     write(msg, '(A,A,A,F8.2,A)') '  magnetic field added to a hydrodynamic restart: seed ', trim(b_seed), ' (', b_seed_G, ' G)'
@@ -708,7 +751,8 @@ contains
           ! with B: the fast speed's bound c_red + v_A (the diffusion's speed; v_A capped, see va_eff)
           if (use_B) then
             do i = 1 - ng, nb(1) + ng
-              cs_G(i, j, k) = cs_G(i, j, k) + va_eff(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rp(i))
+              cs_G(i, j, k) = cs_G(i, j, k) + va_eff(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rp(i), &
+                  cell_cap(i, j, k, ib, cs_G(i, j, k)))
             end do
           end if
         else
@@ -744,7 +788,7 @@ contains
         call vexp(nb(1), q(:, 1), e)
         do i = 1, nb(1)
           cs = sqrt(q(i, 2)*e(i)/rp(i))/xi(i)
-          if (use_B) cs = cs + va_eff(sum(State_GVB(i, j, k, br_:bp_, iBlock)**2), rp(i))
+          if (use_B) cs = cs + va_eff(sum(State_GVB(i, j, k, br_:bp_, iBlock)**2), rp(i), cell_cap(i, j, k, iBlock, cs))
           rr = r_c(i)
           rc = (abs(State_GVB(i, j, k, vr_, iBlock)) + cs)/drdxi_c(i) &
               + (abs(State_GVB(i, j, k, vt_, iBlock)) + cs)/(rr*Metric_DB(2, iBlock)%Dx_I(j)) &
@@ -1173,7 +1217,8 @@ contains
             jj = J_CV(i, j, k, :)
             rho = rho_G(i, j, k)
             R_CV(i, j, k, vr_:vp_) = R_CV(i, j, k, vr_:vp_) &
-                + lorentz_f(sum(b**2), rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)) &
+                + lorentz_f(sum(b**2), rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib), &
+                cell_cap(i, j, k, ib, cell_cs(i, j, k, rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)))) &
                 *[jj(2)*b(3) - jj(3)*b(2), jj(3)*b(1) - jj(1)*b(3), jj(1)*b(2) - jj(2)*b(1)]/(four_pi*rho)
             ch = ch_cell(i, j, k, ib)
             R_CV(i, j, k, psi_) = -ch**2*divB_C(i, j, k)
@@ -1283,7 +1328,8 @@ contains
   real(dp) function ch_cell(i, j, k, ib) result(ch)
     integer, intent(in) :: i, j, k, ib
     real(dp) :: s_inv, dti
-    ch = cs0(i)/xi(i) + va_eff(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib))
+    ch = cs0(i)/xi(i) + va_eff(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib), &
+        cell_cap(i, j, k, ib, cs0(i)/xi(i)))
     if (glm_ch /= 'cfl' .or. dt_now <= 0.0_dp) return
     s_inv = 1.0_dp/drdxi_c(i) + 1.0_dp/(r_c(i)*Metric_DB(2, ib)%Dx_I(j)) &
         + 1.0_dp/(r_c(i)*sin(Metric_DB(2, ib)%X_I(j))*Metric_DB(3, ib)%Dx_I(k))
@@ -1305,17 +1351,48 @@ contains
   ! The Alfven-speed cap (va_max > 0, after Rempel 2009/2017): the Lorentz
   ! force's factor f = 1/sqrt(1 + (v_A/va_max)^4) for |B|^2 = b2 and the
   ! physical density rho; 1 without the cap
-  pure real(dp) function lorentz_f(b2, rho) result(f)
+  ! (cap: the cell's cap from cell_cap instead of va_max)
+  pure real(dp) function lorentz_f(b2, rho, cap) result(f)
     real(dp), intent(in) :: b2, rho
+    real(dp), intent(in), optional :: cap
+    real(dp) :: c
+    c = va_max
+    if (present(cap)) c = cap
     f = 1.0_dp
-    if (va_max > 0.0_dp) f = 1.0_dp/sqrt(1.0_dp + (b2/(four_pi*rho*va_max**2))**2)
+    if (c > 0.0_dp) f = 1.0_dp/sqrt(1.0_dp + (b2/(four_pi*rho*c**2))**2)
   end function lorentz_f
 
   ! The Alfven speed the scheme sees: sqrt(f) v_A (-> va_max for v_A >> va_max)
-  pure real(dp) function va_eff(b2, rho) result(va)
+  pure real(dp) function va_eff(b2, rho, cap) result(va)
     real(dp), intent(in) :: b2, rho
-    va = sqrt(lorentz_f(b2, rho)*b2/(four_pi*rho))
+    real(dp), intent(in), optional :: cap
+    va = sqrt(lorentz_f(b2, rho, cap)*b2/(four_pi*rho))
   end function va_eff
+
+  ! The Alfven-speed cap of cell (i, j, k) of the bound block ib (cs: its signal
+  ! speed c_s/xi): va_max, or with va_dt_target > 0 the speed that keeps the
+  ! cell's step at the target, max(cfl dx_min/va_dt_target - (cs + |v|),
+  ! va_floor_cs cs S(z), 1 km/s)
+  real(dp) function cell_cap(i, j, k, ib, cs) result(c)
+    integer, intent(in) :: i, j, k, ib
+    real(dp), intent(in) :: cs
+    real(dp) :: dxm, fl
+    c = va_max
+    if (va_dt_target <= 0.0_dp) return
+    dxm = min(drdxi_c(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), &
+        r_c(i)*sin(Metric_DB(2, ib)%X_I(j))*Metric_DB(3, ib)%Dx_I(k))
+    fl = 1.0e5_dp
+    if (use_atmosphere) fl = max(fl, va_floor_cs*cs*atm_switch(z_c(i)))
+    c = max(cfl*dxm/va_dt_target - (cs + norm2(State_GVB(i, j, k, vr_:vp_, ib))), fl)
+  end function cell_cap
+
+  ! The cell's signal speed from the pressure p0 + p1 (Gamma1 ~ 5/3; for the
+  ! cap only), reduced by xi
+  real(dp) function cell_cs(i, j, k, rho) result(cs)
+    integer, intent(in) :: i, j, k
+    real(dp), intent(in) :: rho
+    cs = sqrt(5.0_dp/3.0_dp*max(p0(i) + p1_G(i, j, k), 1.0e-30_dp)/rho)/xi(i)
+  end function cell_cs
 
   ! Longitude means in the global frame (rotation axis = global z), per radial
   ! cell and latitude bin (n_lat_bin bins of equal latitude width): the zonal
@@ -1577,7 +1654,8 @@ contains
             v = State_GVB(i, j, k, vr_:vp_, ib)
             b = State_GVB(i, j, k, br_:bp_, ib)
             jj = J_CV(i, j, k, :)
-            wl = wl + vol*lorentz_f(sum(b**2), rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)) &
+            wl = wl + vol*lorentz_f(sum(b**2), rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib), &
+                cell_cap(i, j, k, ib, cs0(i)/xi(i))) &
                 *dot_product(v, [jj(2)*b(3) - jj(3)*b(2), jj(3)*b(1) - jj(1)*b(3), jj(1)*b(2) - jj(2)*b(1)])/four_pi
             wi = wi + vol*dot_product(b, C_CV(i, j, k, :))/four_pi
           end do
@@ -2548,7 +2626,8 @@ contains
             if (use_B) then
               bmax = max(bmax, norm2(State_GVB(i, j, k, br_:bp_, ib)))
               vamax = max(vamax, norm2(State_GVB(i, j, k, br_:bp_, ib))/sqrt(four_pi*rho))
-              if (lorentz_f(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rho) < 0.9_dp) n_cap = n_cap + 1.0_dp
+              if (lorentz_f(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rho, cell_cap(i, j, k, ib, cs)) < 0.9_dp) &
+                  n_cap = n_cap + 1.0_dp
               n_all = n_all + 1.0_dp
             end if
           end do

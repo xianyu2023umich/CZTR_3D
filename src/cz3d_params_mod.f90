@@ -202,12 +202,23 @@ module cz3d_params_mod
   ! speed and c_h. Not energy conserving where it acts (W_Lorentz in the log
   ! is the scaled work: its sum with dE_mag/dt is the cap's energy sink). 0 = off
   real(dp) :: va_max = 0.0_dp
+  ! the cap from a target time step instead (va_dt_target [s] > 0; then
+  ! va_max is not used): per cell cap = max(cfl dx_min/va_dt_target - (c_s +
+  ! |v|), va_floor_cs c_s S(z), 1 km/s), S the atmosphere switch (0 in the CZ),
+  ! so each cell's Alfven speed is cut where it would limit the step below
+  ! the target, and in the atmosphere never below va_floor_cs times its sound speed
+  real(dp) :: va_dt_target = 0.0_dp, va_floor_cs = 2.0_dp
   ! initial field added at the start (also to an imported state):
   ! 'none' or 'toroidal': B_phi = b_seed_G sin(theta) w(r) about the global z
   ! axis (divergence free), w = 1 below b_seed_r1_rsun, 0 above
-  ! b_seed_r2_rsun, a sin^2 step between (keeps it off a vertical-field top)
+  ! b_seed_r2_rsun, a sin^2 step between (keeps it off a vertical-field top);
+  ! or 'dipole': the l = 1 potential field about the global z axis with a
+  ! source surface at b_seed_rss_rsun (Phi ~ cos(theta) [(r_ss/r)^2 - r/r_ss],
+  ! B_theta = 0 at r_ss), radial above it (B_r(r_ss, theta) (r_ss/r)^2);
+  ! b_seed_G = B_r at the pole at the photosphere (r_top_cz)
   character(len=12) :: b_seed = 'none'
   real(dp) :: b_seed_G = 100.0_dp, b_seed_r1_rsun = 0.95_dp, b_seed_r2_rsun = 0.98_dp
+  real(dp) :: b_seed_rss_rsun = 2.5_dp
 
   ! --- state transfer between runs with different variable sets (ARBOR's
   !     restart files hold a fixed number of variables): export_state writes
@@ -269,6 +280,15 @@ module cz3d_params_mod
   !     (cells <= k_join, the Eddington top at the photosphere as without the
   !     atmosphere). Works with radial blocks and multirate. ---
   logical  :: use_atmosphere = .false.
+  ! heating ~ |B| (Downs et al. 2010, Mok et al. 2005): S H_B |B| exp(-z/lambda_B) x
+  ! 1/(1 + (n_e/n_gate)^4) [erg cm^-3 s^-1, H_B per G] (the gate keeps it out of
+  ! the dense chromosphere; Downs 2016 inject at n_e = 2e11 cm^-3); 0 = off
+  real(dp) :: H_B = 0.0_dp, lambda_B_km = 4.0e4_dp, n_gate = 2.0e11_dp
+  ! conduction along the field (with use_B): the flux -kappa [w (b.grad T) b + (1 - w) grad T],
+  ! w = B^2/(B^2 + b_iso_G^2) (isotropic where there is no field); the tangential
+  ! gradient at a face from its cells' central differences
+  logical  :: cond_along_b = .false.
+  real(dp) :: b_iso_G = 1.0e-3_dp
   ! more heating, S [H_c exp(-z/lambda_c) + H_ext exp(-z/lambda_ext)]
   ! [erg cm^-3 s^-1] (Downs et al. 2010: the quiet-Sun term H_c 7.28e-5 with
   ! lambda_c 40 Mm, the extended term H_ext 5e-7 with lambda_ext 0.7 R_sun,
@@ -292,7 +312,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -322,7 +342,8 @@ contains
     if (wall_check_steps < 1) call arbor_abort('wall_check_steps must be >= 1')
     if (coriolis /= 'split' .and. coriolis /= 'rk') call arbor_abort('coriolis must be split or rk')
     if (glm_ch /= 'fast' .and. glm_ch /= 'cfl') call arbor_abort('glm_ch must be fast or cfl')
-    if (b_seed /= 'none' .and. b_seed /= 'toroidal') call arbor_abort('b_seed must be none or toroidal')
+    if (b_seed /= 'none' .and. b_seed /= 'toroidal' .and. b_seed /= 'dipole') &
+        call arbor_abort('b_seed must be none, toroidal or dipole')
     if (top_energy /= 'eddington' .and. top_energy /= 'cooling') call arbor_abort('top_energy must be eddington or cooling')
     ! (local time stepping, dt1 > 0, works with the atmosphere: relaxation, e.g. of the wind)
     if (use_atmosphere .and. dt_budget > 0.0_dp) call arbor_abort('use_atmosphere needs dt_budget = 0')
