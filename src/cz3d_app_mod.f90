@@ -795,7 +795,11 @@ contains
     i_prof = nint(Data_I(1))
     t_next_prof = Data_I(2)
     t_prof0 = Data_I(3)
-    if (nd == 3 + n_r) tloc = Data_I(4:)
+    if (nd == 3 + n_r) then
+      tloc = Data_I(4:)
+    else
+      tloc = t                                            ! (a different radial grid: all clocks at the run's time)
+    end if
   end subroutine import_meta
 
   ! Uniform in [-1, 1] from (patch, i, j, k): Park-Miller steps (no overflow)
