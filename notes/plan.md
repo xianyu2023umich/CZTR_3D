@@ -147,3 +147,16 @@ visuals first, convergence studies later. 0.234 deg only after it works.
   thin absorption Q = 4 pi kappa rho (J - B(T)) with J the diluted
   photospheric radiation (no implicit solve across blocks).
 
+- 2026-11-11: b_seed = 'pfss' (src/pfss_mod.f90, cz_seed_pfss in
+  cz3d_app_mod): the field above the join from the join cell's B_r (the CZ's
+  own field, no dipole added: the user), computed in the run after the blocks
+  are set up (fresh start, import, hydro restart). Quadrature fit over the
+  Yin-Yang join shell (MPI sums), refined pfss_iter (6) times; l_max default
+  pi/(2 dtheta) (48 at 1.875 deg, 192 at 0.47 deg); source surface
+  b_seed_rss_rsun, radial above. Checks: runs/pfss_check.nml (CZ set to the
+  analytic dipole, atmosphere rebuilt from cell 196 alone): error 7e-8 rms,
+  9e-7 max; at l_max = pi/dtheta the midpoint sums alias (1% rms after 2
+  passes). Standalone test with random coefficients to l = 40: div B and
+  curl B ~1e-8 of |grad B| (FD noise). Import: atmosphere blocks without an
+  exported block keep the init file's state (a CZ_3D export under the
+  atmosphere). Smoke checksum unchanged.

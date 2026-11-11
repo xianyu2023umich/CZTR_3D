@@ -217,10 +217,25 @@ module cz3d_params_mod
   ! or 'dipole': the l = 1 potential field about the global z axis with a
   ! source surface at b_seed_rss_rsun (Phi ~ cos(theta) [(r_ss/r)^2 - r/r_ss],
   ! B_theta = 0 at r_ss), radial above it (B_r(r_ss, theta) (r_ss/r)^2);
-  ! b_seed_G = B_r at the pole at the photosphere (r_top_cz)
+  ! b_seed_G = B_r at the pole at the photosphere (r_top_cz);
+  ! or 'pfss' (use_atmosphere): the field above the join replaced by the
+  ! potential field (source surface b_seed_rss_rsun, radial above it) of the
+  ! B_r of the join cell (the CZ's own field, e.g. imported), after the
+  ! blocks are set up (fresh start, import, or a hydrodynamic restart);
+  ! harmonics to l = pfss_lmax (0: pi/(2 dtheta) of the finest cells, 192 at
+  ! 0.47 deg), the quadrature fit refined pfss_iter times on its residual
+  ! (runs/pfss_check.nml: exact to round-off at pi/(2 dtheta) after 6 passes;
+  ! at pi/dtheta the Yin-Yang midpoint sums alias and the passes converge
+  ! slowly); the monopole is dropped. What the harmonics miss (~2-cell
+  ! scales) stays as a B_r jump at the join (reported as the residual; GLM
+  ! cleans it).
+  ! pfss_check (a test): the CZ field is first set to the 'dipole' seed
+  ! (b_seed_G) and the PFSS result compared with it
   character(len=12) :: b_seed = 'none'
   real(dp) :: b_seed_G = 100.0_dp, b_seed_r1_rsun = 0.95_dp, b_seed_r2_rsun = 0.98_dp
   real(dp) :: b_seed_rss_rsun = 2.5_dp
+  integer :: pfss_lmax = 0, pfss_iter = 6
+  logical :: pfss_check = .false.
 
   ! --- state transfer between runs with different variable sets (ARBOR's
   !     restart files hold a fixed number of variables): export_state writes
@@ -314,7 +329,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -344,8 +359,10 @@ contains
     if (wall_check_steps < 1) call arbor_abort('wall_check_steps must be >= 1')
     if (coriolis /= 'split' .and. coriolis /= 'rk') call arbor_abort('coriolis must be split or rk')
     if (glm_ch /= 'fast' .and. glm_ch /= 'cfl') call arbor_abort('glm_ch must be fast or cfl')
-    if (b_seed /= 'none' .and. b_seed /= 'toroidal' .and. b_seed /= 'dipole') &
-        call arbor_abort('b_seed must be none, toroidal or dipole')
+    if (b_seed /= 'none' .and. b_seed /= 'toroidal' .and. b_seed /= 'dipole' .and. b_seed /= 'pfss') &
+        call arbor_abort('b_seed must be none, toroidal, dipole or pfss')
+    if (b_seed == 'pfss' .and. .not. (use_B .and. use_atmosphere)) &
+        call arbor_abort('b_seed = pfss needs use_B and use_atmosphere (the field above the join)')
     if (top_energy /= 'eddington' .and. top_energy /= 'cooling') call arbor_abort('top_energy must be eddington or cooling')
     ! (local time stepping, dt1 > 0, works with the atmosphere: relaxation, e.g. of the wind)
     if (use_atmosphere .and. dt_budget > 0.0_dp) call arbor_abort('use_atmosphere needs dt_budget = 0')

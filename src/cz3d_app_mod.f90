@@ -20,6 +20,7 @@ module cz3d_app_mod
   ! the mass flux r^2 rho v_r odd about the wall.
   use arbor
   use cz3d_params_mod
+  use pfss_mod, only: pfss_legendre, pfss_radial
   use cz3d_bg_mod, only: k_join, n_r, n_c, bg_view, r_c, r_f, drdxi_c, rho0, s0, p0, lnp0, g_c, z_c, ds0dr, rho1_init, s1_init, &
       v_init, tab, area_f, xi, T0, ddr_c, cs0, vol_c, r_top_cz
   use cz3d_transport_mod, only: transport_column, cool_f, cool_c, grey_i0, tr_view, col_bottom, col_top
@@ -157,7 +158,7 @@ module cz3d_app_mod
   integer, parameter :: nAcc = 18
   real(dp), allocatable :: bgf_r(:)
 
-  public :: max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
+  public :: cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
 
 contains
 
@@ -448,6 +449,199 @@ contains
     call arbor_print(msg)
   end subroutine cz_field_from_hydro
 
+  ! b_seed = 'pfss': the field above the join (cells > k_join) replaced by the
+  ! PFSS field of the join cell's B_r (pfss_mod; R0 = that cell's centre, the
+  ! source surface at b_seed_rss_rsun, radial above it). The coefficients
+  ! come from a midpoint quadrature over the join shell (solid-angle weights,
+  ! 1/2 where both Yin-Yang cores cover a point, as dump_shells_write), refined
+  ! pfss_iter times on the residual, summed over the ranks; the monopole is
+  ! dropped. Each block column then sums the harmonics once (O(L^2)) and each
+  ! cell its l series (O(L)), with l cut where (R0/r)^l < 1e-10. psi = 0
+  ! above the join. pfss_check: the CZ field set to the analytic dipole
+  ! first, and the result compared with it.
+  subroutine cz_seed_pfss()
+    use const_mod, only: Rsun
+    real(dp), allocatable :: c(:,:), s(:,:), dc(:,:), ds(:,:), p(:,:), dpt(:,:), Sl(:), Tl(:), Ul(:), &
+        fr(:,:), gh(:,:), frs(:), ghs(:), cmp(:), smp(:), Bsave(:,:,:,:)
+    real(dp) :: R0, rss, dth, x(3), e(3,3), eth(3), eph(3), bg(3), ct, st, ph, w, b, syn, a, &
+        st_(5), br, bt, bp, x0, err(3), wt, t0
+    integer :: lmx, lcut, it, jb, ib, i, j, k, l, m
+    character(len=200) :: msg
+    if (pfss_check) then
+      do jb = 1, nBlock
+        ib = iBlockList_I(jb)
+        call cz_bind(ib)
+        State_GVB(:, :, :, br_:psi_, ib) = 0.0_dp
+        call seed_dipole(ib)
+      end do
+      call cz_unbind()
+    end if
+    call cz_unbind()
+    t0 = arbor_wtime()
+    R0 = r_c(k_join)                       ! (unbound view: the global grid)
+    rss = b_seed_rss_rsun*Rsun
+    dth = huge(1.0_dp)
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      dth = min(dth, minval(Metric_DB(2, ib)%Dx_I(1:nb(2))))
+    end do
+    dth = arbor_min(dth)
+    lmx = pfss_lmax
+    if (lmx <= 0) lmx = nint(0.5_dp*pi/dth)
+    allocate(c(0:lmx, 0:lmx), s(0:lmx, 0:lmx), dc(0:lmx, 0:lmx), ds(0:lmx, 0:lmx), p(0:lmx, 0:lmx), dpt(0:lmx, 0:lmx), &
+        Sl(0:lmx), Tl(0:lmx), Ul(0:lmx), fr(0:lmx, nb(1)), gh(0:lmx, nb(1)), frs(0:lmx), ghs(0:lmx), cmp(0:lmx), smp(0:lmx))
+    c = 0.0_dp
+    s = 0.0_dp
+    ! --- the fit: pass it synthesises the current coefficients at the join
+    ! shell; the residual's quadrature corrects them (not after the last pass)
+    do it = 0, pfss_iter
+      dc = 0.0_dp
+      ds = 0.0_dp
+      st_ = 0.0_dp                          ! sum w, sum w B, sum w B^2, sum w res^2, max |res|
+      do jb = 1, nBlock
+        ib = iBlockList_I(jb)
+        if (Key_IB(KI+1, ib)*nb(1) + nb(1) /= k_join) cycle
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            w = shell_weight(ib, j, k)
+            if (w <= 0.0_dp) cycle
+            call global_angles(ib, j, k, x, ct, st, ph)
+            call pfss_legendre(lmx, ct, st, p)
+            do m = 0, lmx
+              cmp(m) = cos(m*ph)
+              smp(m) = sin(m*ph)
+            end do
+            b = State_GVB(nb(1), j, k, br_, ib)
+            syn = 0.0_dp
+            do m = 0, lmx
+              do l = m, lmx
+                syn = syn + p(l, m)*(c(l, m)*cmp(m) + s(l, m)*smp(m))
+              end do
+            end do
+            st_ = [st_(1) + w, st_(2) + w*b, st_(3) + w*b*b, st_(4) + w*(b - syn)**2, max(st_(5), abs(b - syn))]
+            if (it == pfss_iter) cycle
+            do m = 0, lmx
+              a = merge(1.0_dp, 2.0_dp, m == 0)*w*(b - syn)
+              dc(m:lmx, m) = dc(m:lmx, m) + a*cmp(m)*p(m:lmx, m)
+              ds(m:lmx, m) = ds(m:lmx, m) + a*smp(m)*p(m:lmx, m)
+            end do
+          end do
+        end do
+      end do
+      call arbor_sum_inplace(st_(1:4))
+      st_(5) = arbor_max(st_(5))
+      write(msg, '(A,I0,A,I0,A,F9.5,A,ES10.3,A,ES10.3,A,ES10.3,A,ES10.3,A)') '  pfss: l_max ', lmx, ', pass ', it, &
+          ': sum of weights/4pi ', st_(1)/(4.0_dp*pi), ', <B_r> ', st_(2)/st_(1), ' G, rms B_r ', sqrt(st_(3)/st_(1)), &
+          ' G, rms residual ', sqrt(st_(4)/st_(1)), ', max ', st_(5), ' G'
+      call arbor_print(msg)
+      if (it == pfss_iter) exit
+      call arbor_sum_inplace(dc)
+      call arbor_sum_inplace(ds)
+      c = c + dc
+      s = s + ds
+    end do
+    c(0, 0) = 0.0_dp                          ! (no monopole)
+    ! --- the field above the join
+    err = 0.0_dp
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      if (r_off + nb(1) <= k_join) cycle
+      x0 = R0/min(r_f(0), rss)
+      lcut = lmx
+      if (x0 < 1.0_dp - 1.0e-12_dp) lcut = min(lmx, max(1, ceiling(log(1.0e-10_dp)/log(x0))))
+      do i = 1, nb(1)
+        call pfss_radial(lcut, min(r_c(i), rss), R0, rss, fr(0:lcut, i), gh(0:lcut, i))
+      end do
+      call pfss_radial(lcut, rss, R0, rss, frs(0:lcut), ghs(0:lcut))
+      if (pfss_check) Bsave = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), br_:bp_, ib)
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          call global_angles(ib, j, k, x, ct, st, ph)
+          call pfss_legendre(lcut, ct, st, p(0:lcut, 0:lcut), dpt(0:lcut, 0:lcut))
+          Sl(0:lcut) = 0.0_dp
+          Tl(0:lcut) = 0.0_dp
+          Ul(0:lcut) = 0.0_dp
+          do m = 0, lcut
+            cmp(m) = cos(m*ph)
+            smp(m) = sin(m*ph)
+            do l = m, lcut
+              a = c(l, m)*cmp(m) + s(l, m)*smp(m)
+              Sl(l) = Sl(l) + p(l, m)*a
+              Tl(l) = Tl(l) + dpt(l, m)*a
+              Ul(l) = Ul(l) + p(l, m)*m*(s(l, m)*cmp(m) - c(l, m)*smp(m))
+            end do
+          end do
+          Ul(0:lcut) = Ul(0:lcut)/max(st, 1.0e-12_dp)
+          eth = [ct*cos(ph), ct*sin(ph), -st]
+          eph = [-sin(ph), cos(ph), 0.0_dp]
+          e = sph_basis(Metric_DB(2, ib)%X_I(j), Metric_DB(3, ib)%X_I(k))
+          do i = 1, nb(1)
+            if (r_c(i) <= rss) then
+              br = sum(fr(0:lcut, i)*Sl(0:lcut))
+              bt = sum(gh(0:lcut, i)*Tl(0:lcut))
+              bp = sum(gh(0:lcut, i)*Ul(0:lcut))
+            else
+              br = sum(frs(0:lcut)*Sl(0:lcut))*(rss/r_c(i))**2
+              bt = 0.0_dp
+              bp = 0.0_dp
+            end if
+            bg = br*x + bt*eth + bp*eph                 ! global Cartesian
+            if (Key_IB(KP, ib) == 2) bg = yy_cart(bg)  ! to this patch's frame
+            State_GVB(i, j, k, br_:bp_, ib) = matmul(transpose(e), bg)
+            State_GVB(i, j, k, psi_, ib) = 0.0_dp
+            if (pfss_check) then
+              wt = sum((State_GVB(i, j, k, br_:bp_, ib) - Bsave(i, j, k, :))**2)
+              err = [err(1) + wt, err(2) + sum(Bsave(i, j, k, :)**2), max(err(3), sqrt(wt))]
+            end if
+          end do
+        end do
+      end do
+    end do
+    call cz_unbind()
+    if (pfss_check) then
+      call arbor_sum_inplace(err(1:2))
+      err(3) = arbor_max(err(3))
+      write(msg, '(A,ES10.3,A,ES10.3,A)') '  pfss_check: |B - B_dipole| above the join: rms/rms|B| ', &
+          sqrt(err(1)/max(err(2), tiny(1.0_dp))), ', max ', err(3)/b_seed_G, ' b_seed_G'
+      call arbor_print(msg)
+    end if
+    write(msg, '(A,ES10.3,A,F8.2,A)') '  pfss: field above the join set (source surface ', rss/Rsun, ' R_sun), ', &
+        arbor_wtime() - t0, ' s'
+    call arbor_print(msg)
+  contains
+    ! the cell's solid angle, halved where both cores cover the point, 0 outside the core
+    real(dp) function shell_weight(ib, j, k) result(w)
+      integer, intent(in) :: ib, j, k
+      real(dp) :: th, ph_, th2, ph2
+      th = Metric_DB(2, ib)%X_I(j)
+      ph_ = Metric_DB(3, ib)%X_I(k)
+      w = Metric_DB(2, ib)%Vol_I(j)*Metric_DB(3, ib)%Vol_I(k)
+      if (.not. core(th, ph_)) then
+        w = 0.0_dp
+      else
+        call yy_angles(th, ph_, th2, ph2)
+        if (core(th2, ph2)) w = 0.5_dp*w
+      end if
+    end function shell_weight
+    logical function core(t, p_)
+      real(dp), intent(in) :: t, p_
+      core = t >= 0.25_dp*pi .and. t <= 0.75_dp*pi .and. abs(p_) <= 0.75_dp*pi
+    end function core
+    ! the cell centre's global unit vector, cos/sin of the global colatitude and the longitude
+    subroutine global_angles(ib, j, k, x, ct, st, ph)
+      integer, intent(in) :: ib, j, k
+      real(dp), intent(out) :: x(3), ct, st, ph
+      real(dp) :: e(3,3)
+      e = sph_basis(Metric_DB(2, ib)%X_I(j), Metric_DB(3, ib)%X_I(k))
+      x = e(:, 1)
+      if (Key_IB(KP, ib) == 2) x = yy_cart(x)
+      ct = max(-1.0_dp, min(1.0_dp, x(3)))
+      st = sqrt(max(1.0_dp - ct*ct, 0.0_dp))
+      ph = atan2(x(2), x(1))
+    end subroutine global_angles
+  end subroutine cz_seed_pfss
+
   ! ---------------------------------------------------------------- state transfer
 
   ! Every local block's interior state (all nv variables), one file per rank:
@@ -560,7 +754,9 @@ contains
   ! The block's state from the export files in import_dir: its radial part of
   ! the exported block at the same place (the export may hold whole columns
   ! or larger radial blocks); the variables both runs have are copied, the
-  ! others stay as set (B, psi: 0)
+  ! others stay as set (B, psi: 0). With the atmosphere, a block above the
+  ! join without an exported block keeps its initial state (a CZ-only export,
+  ! e.g. CZ_3D's, under the atmosphere of the init file)
   subroutine import_block(iBlock)
     integer, intent(in) :: iBlock
     real(dp), allocatable :: buf(:,:,:,:)
@@ -568,6 +764,7 @@ contains
     character(len=300) :: name
     call import_open()
     m = import_record(Key_IB(:, iBlock), .true.)
+    if (m == 0 .and. use_atmosphere .and. Key_IB(KI+1, iBlock)*nb(1) >= k_join) return
     if (m == 0) call arbor_abort('cz3d: import: no exported block at this place (a different grid?)')
     allocate(buf(imp_nb(1), imp_nb(2), imp_nb(3), imp_nv))
     write(name, '(A,A,I4.4,A)') trim(import_dir), '/state_export_r', imp_file(m), '.bin'
