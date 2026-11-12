@@ -462,7 +462,7 @@ contains
   subroutine cz_seed_pfss()
     use const_mod, only: Rsun
     real(dp), allocatable :: c(:,:), s(:,:), dc(:,:), ds(:,:), p(:,:), dpt(:,:), Sl(:), Tl(:), Ul(:), &
-        fr(:,:), gh(:,:), frs(:), ghs(:), cmp(:), smp(:), Bsave(:,:,:,:)
+        fr(:,:), gh(:,:), frs(:), ghs(:), cmp(:), smp(:), Bsave(:,:,:,:), phi_B(:,:,:,:)
     real(dp) :: R0, rss, dth, x(3), e(3,3), eth(3), eph(3), bg(3), ct, st, ph, w, b, syn, a, &
         st_(5), br, bt, bp, x0, err(3), wt, t0
     integer :: lmx, lcut, it, jb, ib, i, j, k, l, m
@@ -542,11 +542,15 @@ contains
     end do
     c(0, 0) = 0.0_dp                          ! (no monopole)
     ! --- the field above the join
+    if (dpf_check) then
+      allocate(phi_B(nb(1), nb(2), nb(3), nBlockMax))
+      phi_B = 0.0_dp
+    end if
     err = 0.0_dp
     do jb = 1, nBlock
       ib = iBlockList_I(jb)
       call cz_bind(ib)
-      if (r_off + nb(1) <= k_join) cycle
+      if (r_off + nb(1) < k_join .or. (r_off + nb(1) == k_join .and. .not. dpf_check)) cycle
       x0 = R0/min(r_f(0), rss)
       lcut = lmx
       if (x0 < 1.0_dp - 1.0e-12_dp) lcut = min(lmx, max(1, ceiling(log(1.0e-10_dp)/log(x0))))
@@ -577,6 +581,11 @@ contains
           eph = [-sin(ph), cos(ph), 0.0_dp]
           e = sph_basis(Metric_DB(2, ib)%X_I(j), Metric_DB(3, ib)%X_I(k))
           do i = 1, nb(1)
+            if (dpf_check) then                        ! the potential: Phi = -r sum gh_l S_l
+              phi_B(i, j, k, ib) = 0.0_dp
+              if (r_c(i) <= rss) phi_B(i, j, k, ib) = -r_c(i)*sum(gh(0:lcut, i)*Sl(0:lcut))
+              if (r_off + i <= k_join) cycle           ! (the CZ cells: Phi only)
+            end if
             if (r_c(i) <= rss) then
               br = sum(fr(0:lcut, i)*Sl(0:lcut))
               bt = sum(gh(0:lcut, i)*Tl(0:lcut))
@@ -609,6 +618,7 @@ contains
     write(msg, '(A,ES10.3,A,F8.2,A)') '  pfss: field above the join set (source surface ', rss/Rsun, ' R_sun), ', &
         arbor_wtime() - t0, ' s'
     call arbor_print(msg)
+    if (dpf_check) call dpf_check_run(phi_B, rss)
   contains
     ! the cell's solid angle, halved where both cores cover the point, 0 outside the core
     real(dp) function shell_weight(ib, j, k) result(w)
@@ -641,6 +651,129 @@ contains
       ph = atan2(x(2), x(1))
     end subroutine global_angles
   end subroutine cz_seed_pfss
+
+  ! dpf_check: the curl of the analytic PFSS field (now in the state) and of
+  ! B = -grad Phi from the code's own stencils (Phi = the PFSS potential,
+  ! phi_B), both with filled ghosts, measured by the code's curl as
+  ! q = |curl B| r dtheta/|B| (B^2-weighted rms, and the max) in atmosphere
+  ! cells whose stencils stay above the join and below 0.95 r_ss, split into
+  ! patch-interior and patch-edge cells (within 2.5 cells of the Yin-Yang
+  ! patch boundary: their stencils reach interpolated ghosts) and three
+  ! heights (z < 5 Mm, 5-50 Mm, > 50 Mm). Also rms(div B dx)/rms|B| of both.
+  ! The state's field is restored afterwards (the run keeps the analytic PFSS).
+  subroutine dpf_check_run(phi_B, rss)
+    real(dp), intent(in) :: phi_B(:,:,:,:), rss
+    real(dp), allocatable :: Ban(:,:,:,:,:)
+    real(dp) :: acc(4, 2, 3, 2), th, ph, dth, dph, q, b2, z, c2, d2, rj
+    integer :: jb, ib, i, j, k, m, ireg, ih
+    character(len=200) :: msg
+    character(len=8), parameter :: fname(2) = ['PFSS    ', '-grad Ph']
+    character(len=8), parameter :: rname(2) = ['interior', 'edge    ']
+    character(len=10), parameter :: hname(3) = ['z<5Mm     ', '5-50Mm    ', 'z>50Mm    ']
+    call cz_unbind()
+    rj = r_f(k_join)                                     ! the join face (unbound view)
+    allocate(Ban(nb(1), nb(2), nb(3), 3, nBlockMax))
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      Ban(:, :, :, :, ib) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), br_:bp_, ib)
+    end do
+    acc = 0.0_dp            ! (sum B^2, sum B^2 q^2, max q, sum (div B dx)^2) x region x height x field
+    do m = 1, 2
+      if (m == 2) then
+        ! Phi into psi (above the join and the top CZ block), then B = -grad Phi above the join
+        do jb = 1, nBlock
+          ib = iBlockList_I(jb)
+          State_GVB(1:nb(1), 1:nb(2), 1:nb(3), psi_, ib) = phi_B(:, :, :, ib)
+        end do
+        call arbor_fill_ghosts(State_GVB)
+        do jb = 1, nBlock
+          ib = iBlockList_I(jb)
+          call cz_bind(ib)
+          if (r_off + nb(1) <= k_join) cycle
+          call ddr_block(State_GVB(:, :, :, psi_, ib), Dr_C)
+          associate (th_ => Metric_DB(2, ib)%X_I)
+            do i = max(1, k_join - r_off + 1), nb(1)
+              State_GVB(i, 1:nb(2), 1:nb(3), br_, ib) = -Dr_C(i, :, :)
+            end do
+            call arbor_deriv_cell(State_GVB, psi_, 2, ib, D_C)
+            do i = max(1, k_join - r_off + 1), nb(1)
+              State_GVB(i, 1:nb(2), 1:nb(3), bt_, ib) = -D_C(i, :, :)/r_c(i)
+            end do
+            call arbor_deriv_cell(State_GVB, psi_, 3, ib, D_C)
+            do k = 1, nb(3)
+              do j = 1, nb(2)
+                do i = max(1, k_join - r_off + 1), nb(1)
+                  State_GVB(i, j, k, bp_, ib) = -D_C(i, j, k)/(r_c(i)*sin(th_(j)))
+                end do
+              end do
+            end do
+          end associate
+        end do
+        call cz_unbind()
+      end if
+      call arbor_fill_ghosts(State_GVB)
+      do jb = 1, nBlock
+        ib = iBlockList_I(jb)
+        call cz_bind(ib)
+        if (r_off + nb(1) <= k_join) cycle
+        B_GV = State_GVB(:, :, :, br_:bp_, ib)
+        call curl_block(B_GV, ib, J_CV)
+        call div_block(State_GVB(:, :, :, br_:bp_, ib), ib, divB_C)
+        dth = Metric_DB(2, ib)%Dx_I(1)
+        dph = Metric_DB(3, ib)%Dx_I(1)
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            th = Metric_DB(2, ib)%X_I(j)
+            ph = Metric_DB(3, ib)%X_I(k)
+            ireg = 1
+            if (th < 0.25_dp*pi + 2.5_dp*dth .or. th > 0.75_dp*pi - 2.5_dp*dth .or. &
+                abs(ph) > 0.75_dp*pi - 2.5_dp*dph) ireg = 2
+            do i = 1, nb(1)
+              if (r_off + i < k_join + 3 .or. r_c(i) > 0.95_dp*rss) cycle
+              z = r_c(i) - rj
+              ih = 1
+              if (z > 5.0e8_dp) ih = 2
+              if (z > 5.0e9_dp) ih = 3
+              b2 = sum(State_GVB(i, j, k, br_:bp_, ib)**2)
+              if (b2 <= 0.0_dp) cycle
+              c2 = sum(J_CV(i, j, k, :)**2)*(r_c(i)*dth)**2
+              d2 = (divB_C(i, j, k)*r_c(i)*dth)**2
+              q = sqrt(c2/b2)
+              acc(:, ireg, ih, m) = [acc(1, ireg, ih, m) + b2, acc(2, ireg, ih, m) + c2, &
+                  max(acc(3, ireg, ih, m), q), acc(4, ireg, ih, m) + d2]
+            end do
+          end do
+        end do
+      end do
+      call cz_unbind()
+    end do
+    do m = 1, 2
+      do ih = 1, 3
+        do ireg = 1, 2
+          acc(1, ireg, ih, m) = arbor_sum(acc(1, ireg, ih, m))
+          acc(2, ireg, ih, m) = arbor_sum(acc(2, ireg, ih, m))
+          acc(3, ireg, ih, m) = arbor_max(acc(3, ireg, ih, m))
+          acc(4, ireg, ih, m) = arbor_sum(acc(4, ireg, ih, m))
+          write(msg, '(A,A,1X,A,1X,A,A,ES10.3,A,ES10.3,A,ES10.3)') '  dpf_check ', fname(m), rname(ireg), hname(ih), &
+              ': rms |curl B| r dth/|B| ', sqrt(acc(2, ireg, ih, m)/max(acc(1, ireg, ih, m), tiny(1.0_dp))), &
+              '  max ', acc(3, ireg, ih, m), '  rms div B r dth/|B| ', sqrt(acc(4, ireg, ih, m)/max(acc(1, ireg, ih, m), tiny(1.0_dp)))
+          call arbor_print(msg)
+        end do
+      end do
+    end do
+    ! the analytic field back (psi 0 above the join, as cz_seed_pfss sets it)
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      if (r_off + nb(1) <= k_join) cycle
+      do i = max(1, k_join - r_off + 1), nb(1)
+        State_GVB(i, 1:nb(2), 1:nb(3), br_:bp_, ib) = Ban(i, :, :, :, ib)
+        State_GVB(i, 1:nb(2), 1:nb(3), psi_, ib) = 0.0_dp
+      end do
+    end do
+    call cz_unbind()
+    call arbor_fill_ghosts(State_GVB)
+  end subroutine dpf_check_run
 
   ! ---------------------------------------------------------------- state transfer
 
