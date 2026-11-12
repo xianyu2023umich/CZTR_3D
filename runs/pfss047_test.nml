@@ -36,4 +36,5 @@
   H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11
   t_end = 1.0e9, n_step_max = 0
   n_log = 20, dt_prof = 0.0, prof_every = 0, plot_dt = 0.0, restart_dt = 0.0
+  wall_time_margin = 300.0
 /
