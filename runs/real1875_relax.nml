@@ -11,12 +11,18 @@
 ! km/s at l = 96, 37 at 48, 4 at 24; the same with H_B off, so not the
 ! heating). At l = 24, 92% of rms B_r stays unfitted: a B_r jump at the
 ! join for GLM, and the small scales enter with the CZ's own evolution.
+! Second try at l = 24: NaN again at the TR base (cell 242, 872 steps). The
+! real cause: the background rho0 followed the initial TR (rho/rho0 1.15-1.9
+! at 1.5-1.7 Mm); with the field the TR height varies by column (1330-1975
+! km), and where it sits lower rho ~ 0.1 rho0. Now data/init_wind20_dip_m600.dat:
+! the same state, the background built with --tr-margin-km 600 (rho0 below
+! the state as if its TR were 600 km lower: rho/rho0 >= 26 at 1.5-1.7 Mm).
 ! Local time stepping, no cap in the atmosphere (dt1, dt_max large); profiles
 ! every 200 steps, ~1.5 s per step
 ! on 8 ranks. Before it: tools/coarsen_export.py <CZ_3D export_mhd5> <..._1875>.
 !   mpirun -np 8 ./cztr3d.x runs/real1875_relax.nml
 &cz3d
-  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip.dat', n_r_cells = 560
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
   table_file = 'data/eos_table_wind.bin'
   import_dir = '../CZ_3D/output_stampede3/export_mhd5_1875'
   out_dir = 'output/real1875_relax'

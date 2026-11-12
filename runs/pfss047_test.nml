@@ -13,7 +13,7 @@
 ! Submit from the CZTR_3D directory (import_dir: where the export is):
 !   sbatch -N 4 --ntasks-per-node 112 -t 00:30:00 tools/job.stampede3_spr4 runs/pfss047_test.nml
 &cz3d
-  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip.dat', n_r_cells = 560
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
   table_file = 'data/eos_table_wind.bin'
   import_dir = '../CZ_3D/output/export_mhd5'
   out_dir = 'output/pfss047_test'

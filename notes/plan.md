@@ -160,3 +160,15 @@ visuals first, convergence studies later. 0.234 deg only after it works.
   curl B ~1e-8 of |grad B| (FD noise). Import: atmosphere blocks without an
   exported block keep the init file's state (a CZ_3D export under the
   atmosphere). Smoke checksum unchanged.
+- 2026-11-12: real field at 1.875 deg (mhd5 coarsened, runs/real1875_relax.nml):
+  two NaNs at the TR base. (1) l_max = 96: near-grid-scale PFSS components
+  are not discretely curl-free; spurious Lorentz force, Alfvenic flows at ~5
+  Mm (143 km/s; 37 at l = 48, 4 at l = 24; not the heating). (2) l_max = 24
+  still crashed: the background rho0 hugged the initial TR (rho/rho0 1.15-1.9
+  at 1.5-1.7 Mm, from the bisection for the largest H_inf); the field makes
+  the TR height vary by column (1330-1975 km) and rho fell to ~0.1 rho0 where
+  it sat lower. Fix: build_atm_init.py --tr-margin-km (rho0 below the state
+  as if the TR were that much lower, from margin below the TR up):
+  data/init_wind20_dip_m600.dat (H_inf 99.5 -> 52.2 km; rho/rho0 >= 26 at
+  1.5-1.7 Mm, ~1e3-1e4 in the upper chromosphere; ln rho0 2nd difference
+  0.090). Lesson: in 3D with field the background needs a TR margin.

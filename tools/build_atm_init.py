@@ -47,7 +47,7 @@ Usage: build_atm_init.py grid.dat cz_init.dat cztr_step3_init.dat out.dat
        [--z-cut-km 3000] [--T-corona 1.5e6] [--wT-km 10000] [--mu 0.593]
        [--blend-km 300] [--n-fit 4] [--Tb-frac 0.8] [--fB 0.1]
        [--parker] [--parker-r1 1.2] [--parker-r2 2.0] [--v-z0-km 2000] [--v-z1-km 5000]
-       [--floor-frac 0.3] [--rho0-min 2e-21]
+       [--floor-frac 0.3] [--rho0-min 2e-21] [--state-profile file] [--tr-margin-km 600]
 """
 import argparse
 import numpy as np
@@ -96,6 +96,8 @@ def main():
     ap.add_argument('--floor-frac', type=float, default=0.0, help='background floor: this x min(rho) above the join')
     ap.add_argument('--rho0-min', type=float, default=0.0, help='background floor at least this (EOS table)')
     ap.add_argument('--state-profile', default='', help='the atmosphere state from this profile file')
+    ap.add_argument('--tr-margin-km', type=float, default=0.0,
+                    help='rho0 kept below the state shifted down by this much (a TR that sits lower in some columns)')
     a = ap.parse_args()
 
     n, rc, rf = read_grid(a.grid)
@@ -228,15 +230,28 @@ def main():
         return out
 
     beyond = (rc[atm] - r_k) > blend
+    # the bound: the state, or with --tr-margin-km the state as if its TR sat
+    # that much lower: min(rho(z), rho(z + margin)) from margin below the TR
+    # (the first T = 1e5 K crossing) up; the chromosphere below it stays (its
+    # density is set by the photosphere). In 3D the TR height differs from
+    # column to column, and where rho << rho0 the pressure force is a small
+    # difference of large terms (CZTR_3D real1875_relax: NaN at the TR base
+    # with the TR 250 km below the mean and rho0 ~ 10 rho there)
+    za = z[atm]
+    rho_bound = rho[atm].copy()
+    if a.tr_margin_km > 0.0:
+        z_tr = za[np.argmax(T[atm] > 1.0e5)]
+        sh = za >= z_tr - a.tr_margin_km
+        rho_bound[sh] = np.minimum(rho_bound[sh], np.exp(np.interp(za[sh] + a.tr_margin_km, za, np.log(rho[atm]))))
     lo, hi = 1.0e5, 1.0e12                               # cm: 1 km .. 1e7 km (H_inf may lie below H_k)
     for _ in range(80):
         mid = np.sqrt(lo * hi)
-        if np.all(fill(mid)[beyond] <= rho[atm][beyond]):
+        if np.all(fill(mid)[beyond] <= rho_bound[beyond]):
             lo = mid
         else:
             hi = mid
     H_inf = lo
-    if not np.all(fill(H_inf)[beyond] <= rho[atm][beyond]):
+    if not np.all(fill(H_inf)[beyond] <= rho_bound[beyond]):
         raise SystemExit('no asymptotic scale height keeps rho0 <= rho beyond the blend zone')
     rho0[atm] = fill(H_inf)
     T0[atm] = T_k + dT * blend * (1.0 - np.exp(-(rc[atm] - r_k) / blend))
@@ -246,8 +261,8 @@ def main():
         f.write('# CZ (cells <= %d) from the CZ init file; atmosphere: CZTR step 3 to z = %.0f km (rho x %.4f), '
                 'then T -> %.3e K (w %.0f km), hydrostatic, mu %.3f\n' % (k, a.z_cut_km, scale, a.T_corona, a.wT_km, a.mu))
         f.write('# background above the join: rho_A (H_k %.1f km -> H_inf %.1f km, blend %.0f km) + rho_B '
-                '(hydrostatic at %.3e K, %.2f x the state at z_cut) + floor %.3e; dT0/dr %.4e K/cm\n'
-                % (H_k / 1e5, H_inf / 1e5, a.blend_km, Tb, a.fB, rho_fl, dT))
+                '(hydrostatic at %.3e K, %.2f x the state at z_cut) + floor %.3e; dT0/dr %.4e K/cm; TR margin %.0f km (TR at %.0f km)\n'
+                % (H_k / 1e5, H_inf / 1e5, a.blend_km, Tb, a.fB, rho_fl, dT, a.tr_margin_km, z_tr if a.tr_margin_km > 0 else 0.0))
         if parker_info:
             f.write('# ' + parker_info + '\n')
         f.write('# n, k\n# i  r[cm]  z[km]  rho  T  v[cm/s]  rho0  T0  g[cm/s2]\n')
