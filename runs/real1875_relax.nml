@@ -17,6 +17,17 @@
 ! km), and where it sits lower rho ~ 0.1 rho0. Now data/init_wind20_dip_m600.dat:
 ! the same state, the background built with --tr-margin-km 600 (rho0 below
 ! the state as if its TR were 600 km lower: rho/rho0 >= 26 at 1.5-1.7 Mm).
+! Third try (l = 24 with the margin background): NaN again, at the same
+! cell: the corner of a Yin block at the patch corner (lat -44, lon 134; the
+! l = 96 crash: a Yang patch edge); min(rho1/rho0) now stayed ~ -0.27 until
+! the jump. The user: the field is not force free (the dipole run's field
+! matched the CZ's; here 92% of B_r at the join is unfitted, and the rest is
+! not discretely curl free). Now friction for the first steps (v_damp_n = 5:
+! v_h and v_r - v_r,init damped with a 5-step time; 5000 steps, ramped off
+! over 3000): the field and the atmosphere relax towards force balance
+! through damped Alfven waves (a pure field relaxation, magnetofriction,
+! would be diffusive: ~(7 Mm/30 km)^2 iterations). 40-step test: max|v_h|
+! 2 km/s at the TR (8 without), the wind kept.
 ! Local time stepping, no cap in the atmosphere (dt1, dt_max large); profiles
 ! every 200 steps, ~1.5 s per step
 ! on 8 ranks. Before it: tools/coarsen_export.py <CZ_3D export_mhd5> <..._1875>.
@@ -44,6 +55,7 @@
   cond_along_b = .true., b_iso_G = 1.0e-3
   H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11
   dt1 = 1.0e4
+  v_damp_n = 5.0, v_damp_steps = 5000, v_damp_ramp = 3000
   t_end = 1.0e9, n_step_max = 10000, dt_max = 1.0e4
   n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 60.0
   plot_at_end = .true.

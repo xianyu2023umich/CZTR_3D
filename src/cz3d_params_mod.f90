@@ -237,6 +237,15 @@ module cz3d_params_mod
   real(dp) :: b_seed_G = 100.0_dp, b_seed_r1_rsun = 0.95_dp, b_seed_r2_rsun = 0.98_dp
   real(dp) :: b_seed_rss_rsun = 2.5_dp
   integer :: pfss_lmax = 0, pfss_iter = 6
+  ! friction on the velocity above the join (a relaxation of the field and
+  ! the atmosphere towards force balance without violent flows): v_h, and
+  ! v_r's deviation from the init file's profile (the wind), multiplied
+  ! by 1 - w/(v_damp_n + 1) after every step (a damping time of v_damp_n
+  ! steps, per shell's own step with local time stepping), w = 1 for the run's
+  ! first v_damp_steps steps (counted from this run's start), then falling
+  ! linearly to 0 over v_damp_ramp steps; v_damp_n = 0: off
+  real(dp) :: v_damp_n = 0.0_dp
+  integer :: v_damp_steps = 0, v_damp_ramp = 0
   logical :: pfss_check = .false.
 
   ! --- state transfer between runs with different variable sets (ARBOR's
@@ -331,7 +340,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &

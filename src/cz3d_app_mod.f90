@@ -1106,6 +1106,29 @@ contains
       end do
       call cz_unbind()
     end if
+    ! friction on v above the join (v_damp_n > 0), for the run's first steps (n_adv: local_steps)
+    if (v_damp_n > 0.0_dp .and. use_atmosphere) then
+      if (n_adv <= v_damp_steps) then
+        cdt = 1.0_dp
+      else if (n_adv <= v_damp_steps + v_damp_ramp) then
+        cdt = 1.0_dp - real(n_adv - v_damp_steps, dp)/real(v_damp_ramp + 1, dp)
+      else
+        cdt = 0.0_dp
+      end if
+      if (cdt > 0.0_dp) then
+        cdt = 1.0_dp - cdt/(v_damp_n + 1.0_dp)
+        do jb = 1, size(iBlocks)
+          call cz_bind(iBlocks(jb))
+          do i = max(1, k_join - r_off + 1), nb(1)
+            ! (v_r towards the init file's profile: the wind keeps flowing)
+            State_GVB(i, 1:nb(2), 1:nb(3), vr_, iBlocks(jb)) = v_init(i) &
+                + cdt*(State_GVB(i, 1:nb(2), 1:nb(3), vr_, iBlocks(jb)) - v_init(i))
+            State_GVB(i, 1:nb(2), 1:nb(3), vt_:vp_, iBlocks(jb)) = cdt*State_GVB(i, 1:nb(2), 1:nb(3), vt_:vp_, iBlocks(jb))
+          end do
+        end do
+        call cz_unbind()
+      end if
+    end if
     ! a cell-centred wall keeps v_r = 0 in its cell (as the next fill would),
     ! and the field components odd about it (B_r for a conductor, B_h for a radial field)
     do jb = 1, size(iBlocks)
