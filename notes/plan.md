@@ -172,3 +172,19 @@ visuals first, convergence studies later. 0.234 deg only after it works.
   data/init_wind20_dip_m600.dat (H_inf 99.5 -> 52.2 km; rho/rho0 >= 26 at
   1.5-1.7 Mm, ~1e3-1e4 in the upper chromosphere; ln rho0 2nd difference
   0.090). Lesson: in 3D with field the background needs a TR margin.
+- 2026-11-12: discrete potential field (b_seed = 'dpf'; the user's idea,
+  like FDIPS): Phi from a compact finite-volume Laplace solve on the grid
+  (BiCGSTAB, radial tridiagonal preconditioner per block column, PFSS start;
+  flux of the CZ's B_r at the join, Phi = 0 at the block face nearest 2.5 R;
+  ARBOR LIMITER_NONE for linear ghost interpolation during the solve), B =
+  -grad Phi with the code's stencils: curl free to round-off inside the
+  patches, B_r continuous at the join at all scales. Dipole check: 8e-4
+  (compact) of the analytic field. Real field (mhd5 at 1.875 deg): 1331
+  iterations, 45 s on 8 ranks. 40-step flows (max/rms v_h km/s; TR base,
+  2 Mm, 5 Mm, 0.2 R): PFSS l=24 8/5.4, 16/10.1, 4/0.2, 52/2.4; compact DPF
+  9/3.4, 22/4.9, 53/1.4, 66/2.9 (the maxima in the outermost patch cells);
+  the 'wide' variant (the code's own div grad, exact div B) up to 486 km/s
+  at the edges: dropped. The Yin-Yang edges are where the low-beta
+  atmosphere feels interpolation errors (CZ: beta >> 1, the field grew in the
+  code); relax with friction. A real fix would be yy_margin > 0 or a better
+  interpolation (affects all runs).

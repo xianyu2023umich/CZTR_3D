@@ -251,6 +251,33 @@ module cz3d_params_mod
   ! with the code's own stencils, its curl against the analytic PFSS field's
   ! (patch interior / patch edges, by height); the run keeps the analytic field
   logical :: dpf_check = .false.
+  ! or 'dpf' (use_atmosphere): a discrete potential field above the join. Phi
+  ! solves the compact finite-volume Laplace equation on the grid (BiCGSTAB,
+  ! a radial tridiagonal preconditioner per block column, the PFSS potential
+  ! as the start), with the flux of the join cell's B_r through the join face
+  ! (Neumann) and Phi = 0 at the radial-block face nearest b_seed_rss_rsun;
+  ! B = -grad Phi with the code's own stencils (curl free on the grid inside
+  ! the Yin-Yang patches), radial above that face. The ghost interpolation is
+  ! linear (unlimited) during the solve. Stops at a relative residual dpf_tol
+  ! or after dpf_maxit iterations.
+  ! dpf_operator: 'compact' (the default) or 'wide' (the code's own div and
+  ! grad, 4th-order stencils: div B and curl B exactly zero inside the patches,
+  ! but near-grid-scale photospheric structure decays far too slowly and the
+  ! Yin-Yang ghost interpolation turns it into field at the patch edges;
+  ! 40-step tests from mhd5 at 1.875 deg: v_h up to 486 km/s in the
+  ! outermost patch cells, 66 with 'compact'). Not for use, kept for reference
+  real(dp) :: dpf_tol = 1.0e-8_dp
+  integer :: dpf_maxit = 3000
+  character(len=8) :: dpf_operator = 'compact'
+  ! 'wide': + dpf_eps x the compact operator (the wide one is blind to
+  ! checkerboard modes of Phi, which the preconditioner feeds in and the
+  ! Yin-Yang interpolation turns into field at the patch edges)
+  real(dp) :: dpf_eps = 0.0_dp
+  ! 'wide': the compact equations instead in the cells within dpf_edge_cells
+  ! of a Yin-Yang patch boundary (there the wide operator leaves near-grid-
+  ! scale oscillations of Phi that the ghost interpolation turns into field;
+  ! 40-step tests: v_h > 100 km/s in the outermost patch cells); 0 = none
+  real(dp) :: dpf_edge_cells = 2.5_dp
 
   ! --- state transfer between runs with different variable sets (ARBOR's
   !     restart files hold a fixed number of variables): export_state writes
@@ -344,7 +371,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -374,10 +401,11 @@ contains
     if (wall_check_steps < 1) call arbor_abort('wall_check_steps must be >= 1')
     if (coriolis /= 'split' .and. coriolis /= 'rk') call arbor_abort('coriolis must be split or rk')
     if (glm_ch /= 'fast' .and. glm_ch /= 'cfl') call arbor_abort('glm_ch must be fast or cfl')
-    if (b_seed /= 'none' .and. b_seed /= 'toroidal' .and. b_seed /= 'dipole' .and. b_seed /= 'pfss') &
-        call arbor_abort('b_seed must be none, toroidal, dipole or pfss')
-    if (b_seed == 'pfss' .and. .not. (use_B .and. use_atmosphere)) &
-        call arbor_abort('b_seed = pfss needs use_B and use_atmosphere (the field above the join)')
+    if (b_seed /= 'none' .and. b_seed /= 'toroidal' .and. b_seed /= 'dipole' .and. b_seed /= 'pfss' &
+        .and. b_seed /= 'dpf') call arbor_abort('b_seed must be none, toroidal, dipole, pfss or dpf')
+    if (dpf_operator /= 'wide' .and. dpf_operator /= 'compact') call arbor_abort('dpf_operator must be wide or compact')
+    if ((b_seed == 'pfss' .or. b_seed == 'dpf') .and. .not. (use_B .and. use_atmosphere)) &
+        call arbor_abort('b_seed = pfss or dpf needs use_B and use_atmosphere (the field above the join)')
     if (top_energy /= 'eddington' .and. top_energy /= 'cooling') call arbor_abort('top_energy must be eddington or cooling')
     ! (local time stepping, dt1 > 0, works with the atmosphere: relaxation, e.g. of the wind)
     if (use_atmosphere .and. dt_budget > 0.0_dp) call arbor_abort('use_atmosphere needs dt_budget = 0')

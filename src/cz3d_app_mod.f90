@@ -465,7 +465,8 @@ contains
         fr(:,:), gh(:,:), frs(:), ghs(:), cmp(:), smp(:), Bsave(:,:,:,:), phi_B(:,:,:,:)
     real(dp) :: R0, rss, dth, x(3), e(3,3), eth(3), eph(3), bg(3), ct, st, ph, w, b, syn, a, &
         st_(5), br, bt, bp, x0, err(3), wt, t0
-    integer :: lmx, lcut, it, jb, ib, i, j, k, l, m
+    integer :: lmx, lcut, it, jb, ib, i, j, k, l, m, k_ss
+    logical :: want_phi
     character(len=200) :: msg
     if (pfss_check) then
       do jb = 1, nBlock
@@ -480,6 +481,14 @@ contains
     t0 = arbor_wtime()
     R0 = r_c(k_join)                       ! (unbound view: the global grid)
     rss = b_seed_rss_rsun*Rsun
+    k_ss = 0
+    if (b_seed == 'dpf') then                          ! the source surface at the nearest radial-block face
+      k_ss = k_join + nb(1)
+      do i = k_join + nb(1), n_r, nb(1)
+        if (abs(r_f(i) - rss) < abs(r_f(k_ss) - rss)) k_ss = i
+      end do
+      rss = r_f(k_ss)
+    end if
     dth = huge(1.0_dp)
     do jb = 1, nBlock
       ib = iBlockList_I(jb)
@@ -542,7 +551,8 @@ contains
     end do
     c(0, 0) = 0.0_dp                          ! (no monopole)
     ! --- the field above the join
-    if (dpf_check) then
+    want_phi = dpf_check .or. b_seed == 'dpf'
+    if (want_phi) then
       allocate(phi_B(nb(1), nb(2), nb(3), nBlockMax))
       phi_B = 0.0_dp
     end if
@@ -550,7 +560,7 @@ contains
     do jb = 1, nBlock
       ib = iBlockList_I(jb)
       call cz_bind(ib)
-      if (r_off + nb(1) < k_join .or. (r_off + nb(1) == k_join .and. .not. dpf_check)) cycle
+      if (r_off + nb(1) < k_join .or. (r_off + nb(1) == k_join .and. .not. want_phi)) cycle
       x0 = R0/min(r_f(0), rss)
       lcut = lmx
       if (x0 < 1.0_dp - 1.0e-12_dp) lcut = min(lmx, max(1, ceiling(log(1.0e-10_dp)/log(x0))))
@@ -581,7 +591,7 @@ contains
           eph = [-sin(ph), cos(ph), 0.0_dp]
           e = sph_basis(Metric_DB(2, ib)%X_I(j), Metric_DB(3, ib)%X_I(k))
           do i = 1, nb(1)
-            if (dpf_check) then                        ! the potential: Phi = -r sum gh_l S_l
+            if (want_phi) then                         ! the potential: Phi = -r sum gh_l S_l
               phi_B(i, j, k, ib) = 0.0_dp
               if (r_c(i) <= rss) phi_B(i, j, k, ib) = -r_c(i)*sum(gh(0:lcut, i)*Sl(0:lcut))
               if (r_off + i <= k_join) cycle           ! (the CZ cells: Phi only)
@@ -619,6 +629,36 @@ contains
         arbor_wtime() - t0, ' s'
     call arbor_print(msg)
     if (dpf_check) call dpf_check_run(phi_B, rss)
+    if (b_seed == 'dpf') then
+      call dpf_solve(phi_B, k_ss)
+      if (pfss_check) then                           ! the solved field against the analytic dipole (below 0.95 r_ss)
+        err = 0.0_dp
+        do jb = 1, nBlock
+          ib = iBlockList_I(jb)
+          call cz_bind(ib)
+          if (r_off + nb(1) <= k_join) cycle
+          Bsave = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), br_:bp_, ib)
+          State_GVB(:, :, :, br_:bp_, ib) = 0.0_dp
+          call seed_dipole(ib)
+          do k = 1, nb(3)
+            do j = 1, nb(2)
+              do i = 1, nb(1)
+                if (r_c(i) > 0.95_dp*rss) cycle
+                wt = sum((Bsave(i, j, k, :) - State_GVB(i, j, k, br_:bp_, ib))**2)
+                err = [err(1) + wt, err(2) + sum(State_GVB(i, j, k, br_:bp_, ib)**2), max(err(3), sqrt(wt))]
+              end do
+            end do
+          end do
+          State_GVB(1:nb(1), 1:nb(2), 1:nb(3), br_:bp_, ib) = Bsave
+        end do
+        call cz_unbind()
+        call arbor_sum_inplace(err(1:2))
+        err(3) = arbor_max(err(3))
+        write(msg, '(A,ES10.3,A,ES10.3,A)') '  pfss_check (dpf): |B - B_dipole| below 0.95 r_ss: rms/rms|B| ', &
+            sqrt(err(1)/max(err(2), tiny(1.0_dp))), ', max ', err(3)/b_seed_G, ' b_seed_G'
+        call arbor_print(msg)
+      end if
+    end if
   contains
     ! the cell's solid angle, halved where both cores cover the point, 0 outside the core
     real(dp) function shell_weight(ib, j, k) result(w)
@@ -774,6 +814,443 @@ contains
     call cz_unbind()
     call arbor_fill_ghosts(State_GVB)
   end subroutine dpf_check_run
+
+  ! b_seed = 'dpf': the discrete potential field above the join. Unknown Phi
+  ! in the cells k_join+1..k_ss (whole radial blocks; k_ss a block face, the
+  ! source surface). Compact finite-volume Laplacian (V times it, symmetric
+  ! within a patch): sum over the faces of c_f (Phi_nb - Phi), c_f = area/
+  ! distance; at the join face the flux of the join cell's B_r (r^2 B_r kept)
+  ! on the right-hand side, at the k_ss face Phi = 0 (odd ghost). The
+  ! neighbours come from ghost fills (Yin-Yang: linear interpolation,
+  ! LIMITER_NONE, during the solve). BiCGSTAB, right-preconditioned by a radial
+  ! tridiagonal solve per column within each block, started from the PFSS
+  ! potential phi_B. Then B = -grad Phi with the code's stencils in the cells
+  ! k_join+1..k_ss (Phi below the join extended with the CZ's B_r, odd above
+  ! k_ss), and B_r ~ r^-2, B_h = 0 above k_ss; psi = 0 above the join.
+  subroutine dpf_solve(phi_B, k_ss)
+    real(dp), intent(in) :: phi_B(:,:,:,:)
+    integer, intent(in) :: k_ss
+    real(dp), allocatable :: X(:,:,:,:,:), Cf(:,:,:,:,:), xv(:,:,:,:), rv(:,:,:,:), rh(:,:,:,:), pv(:,:,:,:), &
+        vv(:,:,:,:), sv(:,:,:,:), tv(:,:,:,:), bv(:,:,:,:), ph_(:,:,:,:), sh(:,:,:,:), yc(:,:,:,:)
+    logical, allocatable :: edge(:,:,:)
+    real(dp) :: rho_, rho_old, alpha, omega, beta, bnorm, rnorm, t0, dO, drr, brf
+    integer :: it, jb, ib, i, j, k, lim_save, layer
+    character(len=200) :: msg
+    t0 = arbor_wtime()
+    lim_save = iLimiter
+    iLimiter = LIMITER_NONE
+    allocate(X(1-ng:nb(1)+ng, 1-ng:nb(2)+ng, 1-ng:nb(3)+ng, 1, nBlockMax), Cf(nb(1), nb(2), nb(3), 6, nBlockMax))
+    allocate(xv(nb(1), nb(2), nb(3), nBlockMax))
+    allocate(rv, rh, pv, vv, sv, tv, bv, ph_, sh, yc, mold=xv)
+    allocate(edge(nb(2), nb(3), nBlockMax))
+    edge = .false.
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          associate (th => Metric_DB(2, ib)%X_I(j), ph => Metric_DB(3, ib)%X_I(k), &
+              dth => Metric_DB(2, ib)%Dx_I(j), dph => Metric_DB(3, ib)%Dx_I(k))
+            edge(j, k, ib) = dpf_operator == 'wide' .and. dpf_edge_cells > 0.0_dp .and. &
+                (th < 0.25_dp*pi + dpf_edge_cells*dth .or. th > 0.75_dp*pi - dpf_edge_cells*dth &
+                .or. abs(ph) > 0.75_dp*pi - dpf_edge_cells*dph)
+          end associate
+        end do
+      end do
+    end do
+    X = 0.0_dp;  Cf = 0.0_dp
+    xv = 0.0_dp;  rv = 0.0_dp;  rh = 0.0_dp;  pv = 0.0_dp;  vv = 0.0_dp;  sv = 0.0_dp;  tv = 0.0_dp;  bv = 0.0_dp
+    ph_ = 0.0_dp;  sh = 0.0_dp
+    ! the face coefficients (1: r below, 2: r above, 3: theta below, 4: theta above, 5/6: phi) and b
+    call arbor_fill_ghosts(State_GVB)                    ! (the join cell's B_r in the ghosts of the bottom blocks)
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      if (.not. in_solve(ib)) cycle
+      associate (th => Metric_DB(2, ib)%X_I, thf => Metric_DB(2, ib)%X_F, dth => Metric_DB(2, ib)%Dx_I, &
+          ph => Metric_DB(3, ib)%X_I, dph => Metric_DB(3, ib)%Dx_I, vt => Metric_DB(2, ib)%Vol_I, &
+          vp => Metric_DB(3, ib)%Vol_I)
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            dO = vt(j)*vp(k)
+            do i = 1, nb(1)
+              drr = r_f(i) - r_f(i-1)
+              if (r_off + i > k_join + 1) Cf(i, j, k, 1, ib) = r_f(i-1)**2*dO/(r_c(i) - r_c(i-1))
+              Cf(i, j, k, 2, ib) = r_f(i)**2*dO/(r_c(i+1) - r_c(i))
+              if (r_off + i == k_ss) Cf(i, j, k, 2, ib) = 2.0_dp*Cf(i, j, k, 2, ib)     ! (Phi = 0 at the face: odd ghost)
+              Cf(i, j, k, 3, ib) = drr*sin(thf(j-1))*dph(k)/(th(j) - th(j-1))
+              Cf(i, j, k, 4, ib) = drr*sin(thf(j))*dph(k)/(th(j+1) - th(j))
+              Cf(i, j, k, 5, ib) = drr*dth(j)/(sin(th(j))*(ph(k) - ph(k-1)))
+              Cf(i, j, k, 6, ib) = drr*dth(j)/(sin(th(j))*(ph(k+1) - ph(k)))
+              if (r_off + i == k_join + 1) bv(i, j, k, ib) = -dO*r_c(i-1)**2*State_GVB(i-1, j, k, br_, ib)
+            end do
+          end do
+        end do
+      end associate
+      xv(:, :, :, ib) = phi_B(:, :, :, ib)
+    end do
+    call cz_unbind()
+    if (dpf_operator == 'wide') then                 ! b = V div B(Phi = 0): the CZ's field below the join
+      sv = 0.0_dp
+      call wide_op(sv, tv, .true.)
+      do jb = 1, nBlock                                ! (bv held the compact operator's b)
+        ib = iBlockList_I(jb)
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            if (.not. edge(j, k, ib)) bv(:, j, k, ib) = -tv(:, j, k, ib) + max(dpf_eps, 0.0_dp)*bv(:, j, k, ib)
+          end do
+        end do
+      end do
+      tv = 0.0_dp
+    end if
+    ! BiCGSTAB (right preconditioned): r = b - A x
+    call apply_A(xv, vv)
+    rv = bv - vv
+    rh = rv
+    bnorm = sqrt(dot(bv, bv))
+    rnorm = sqrt(dot(rv, rv))
+    write(msg, '(A,I0,A,ES10.3,A,ES10.3)') '  dpf: source surface at face ', k_ss, ', |b| ', bnorm, &
+        ', relative residual of the PFSS start ', rnorm/bnorm
+    call arbor_print(msg)
+    rho_old = 1.0_dp;  alpha = 1.0_dp;  omega = 1.0_dp
+    pv = 0.0_dp;  vv = 0.0_dp
+    do it = 1, dpf_maxit
+      rho_ = dot(rh, rv)
+      beta = (rho_/rho_old)*(alpha/omega)
+      pv = rv + beta*(pv - omega*vv)
+      call precond(pv, ph_)
+      call apply_A(ph_, vv)
+      alpha = rho_/dot(rh, vv)
+      sv = rv - alpha*vv
+      call precond(sv, sh)
+      call apply_A(sh, tv)
+      omega = dot(tv, sv)/dot(tv, tv)
+      xv = xv + alpha*ph_ + omega*sh
+      rv = sv - omega*tv
+      rho_old = rho_
+      rnorm = sqrt(dot(rv, rv))
+      if (mod(it, 50) == 0 .or. rnorm <= dpf_tol*bnorm) then
+        write(msg, '(A,I6,A,ES10.3)') '  dpf: iteration ', it, ', relative residual ', rnorm/bnorm
+        call arbor_print(msg)
+      end if
+      if (rnorm <= dpf_tol*bnorm) exit
+    end do
+    ! B = -grad Phi (Phi in psi; its ghosts below the join and above k_ss set here)
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      if (in_solve(ib)) State_GVB(1:nb(1), 1:nb(2), 1:nb(3), psi_, ib) = xv(:, :, :, ib)
+    end do
+    call arbor_fill_ghosts(State_GVB)
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      if (.not. in_solve(ib)) cycle
+      if (r_off == k_join) then                        ! Phi continued with the CZ's B_r (ghosts 0, -1: cells k_join, k_join - 1)
+        State_GVB(0, :, :, psi_, ib) = State_GVB(1, :, :, psi_, ib) &
+            + State_GVB(0, :, :, br_, ib)*(r_c(0)/r_f(0))**2*(r_c(1) - r_c(0))
+        State_GVB(-1, :, :, psi_, ib) = State_GVB(0, :, :, psi_, ib) + State_GVB(0, :, :, br_, ib)*(r_c(0) - r_c(-1))
+      end if
+      if (r_off + nb(1) == k_ss) then                  ! odd about the k_ss face
+        State_GVB(nb(1)+1, :, :, psi_, ib) = -State_GVB(nb(1), :, :, psi_, ib)
+        State_GVB(nb(1)+2, :, :, psi_, ib) = -State_GVB(nb(1)-1, :, :, psi_, ib)
+      end if
+      call ddr_block(State_GVB(:, :, :, psi_, ib), Dr_C)
+      State_GVB(1:nb(1), 1:nb(2), 1:nb(3), br_, ib) = -Dr_C
+      call arbor_deriv_cell(State_GVB, psi_, 2, ib, D_C)
+      do i = 1, nb(1)
+        State_GVB(i, 1:nb(2), 1:nb(3), bt_, ib) = -D_C(i, :, :)/r_c(i)
+      end do
+      call arbor_deriv_cell(State_GVB, psi_, 3, ib, D_C)
+      associate (th => Metric_DB(2, ib)%X_I)
+        do j = 1, nb(2)
+          do i = 1, nb(1)
+            State_GVB(i, j, 1:nb(3), bp_, ib) = -D_C(i, j, :)/(r_c(i)*sin(th(j)))
+          end do
+        end do
+      end associate
+    end do
+    call cz_unbind()
+    ! above k_ss: radial, block layer by layer (each from the ghosts of the one below)
+    do layer = 0, (n_r - k_ss)/nb(1) - 1
+      call arbor_fill_ghosts(State_GVB)
+      do jb = 1, nBlock
+        ib = iBlockList_I(jb)
+        call cz_bind(ib)
+        if (r_off /= k_ss + layer*nb(1)) cycle
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            if (layer == 0) then                       ! B_r at the k_ss face from Phi (0 there)
+              brf = 2.0_dp*State_GVB(0, j, k, psi_, ib)/(r_c(1) - r_c(0))*(r_f(0)/r_c(1))**0
+              brf = brf*r_f(0)**2
+            else
+              brf = State_GVB(0, j, k, br_, ib)*r_c(0)**2
+            end if
+            do i = 1, nb(1)
+              State_GVB(i, j, k, br_, ib) = brf/r_c(i)**2
+            end do
+            State_GVB(1:nb(1), j, k, bt_:bp_, ib) = 0.0_dp
+          end do
+        end do
+      end do
+      call cz_unbind()
+    end do
+    ! psi 0 above the join
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      if (r_off + nb(1) <= k_join) cycle
+      State_GVB(1:nb(1), 1:nb(2), 1:nb(3), psi_, ib) = 0.0_dp
+    end do
+    call cz_unbind()
+    call arbor_fill_ghosts(State_GVB)
+    iLimiter = lim_save
+    write(msg, '(A,I0,A,ES10.3,A,F8.2,A)') '  dpf: ', min(it, dpf_maxit), ' iterations, relative residual ', &
+        rnorm/bnorm, ', ', arbor_wtime() - t0, ' s'
+    call arbor_print(msg)
+    call b_field_stats('dpf', r_f(k_ss))
+    call arbor_fill_ghosts(State_GVB)
+  contains
+    logical function in_solve(ib)
+      integer, intent(in) :: ib
+      in_solve = Key_IB(KI+1, ib)*nb(1) >= k_join .and. Key_IB(KI+1, ib)*nb(1) + nb(1) <= k_ss
+    end function in_solve
+    real(dp) function dot(a, b)
+      real(dp), intent(in) :: a(:,:,:,:), b(:,:,:,:)
+      integer :: jb_, ib_
+      dot = 0.0_dp
+      do jb_ = 1, nBlock
+        ib_ = iBlockList_I(jb_)
+        if (in_solve(ib_)) dot = dot + sum(a(:, :, :, ib_)*b(:, :, :, ib_))
+      end do
+      dot = arbor_sum(dot)
+    end function dot
+    ! y = A x (ghosts of x filled first)
+    subroutine apply_A(xin, y)
+      real(dp), intent(in) :: xin(:,:,:,:)
+      real(dp), intent(out) :: y(:,:,:,:)
+      integer :: jb_, ib_, i_, j_, k_
+      if (dpf_operator == 'wide') call wide_op(xin, y, .false.)
+      do jb_ = 1, nBlock
+        ib_ = iBlockList_I(jb_)
+        X(1:nb(1), 1:nb(2), 1:nb(3), 1, ib_) = xin(:, :, :, ib_)
+      end do
+      call arbor_fill_ghosts(X)
+      yc = 0.0_dp
+      do jb_ = 1, nBlock
+        ib_ = iBlockList_I(jb_)
+        if (.not. in_solve(ib_)) cycle
+        do k_ = 1, nb(3)
+          do j_ = 1, nb(2)
+            do i_ = 1, nb(1)
+              associate (c => Cf(i_, j_, k_, :, ib_), x0 => X(i_, j_, k_, 1, ib_))
+                yc(i_, j_, k_, ib_) = c(1)*(X(i_-1, j_, k_, 1, ib_) - x0) &
+                    + merge(-c(2)*x0, c(2)*(X(i_+1, j_, k_, 1, ib_) - x0), Key_IB(KI+1, ib_)*nb(1) + i_ == k_ss) &
+                    + c(3)*(X(i_, j_-1, k_, 1, ib_) - x0) + c(4)*(X(i_, j_+1, k_, 1, ib_) - x0) &
+                    + c(5)*(X(i_, j_, k_-1, 1, ib_) - x0) + c(6)*(X(i_, j_, k_+1, 1, ib_) - x0)
+              end associate
+            end do
+          end do
+        end do
+      end do
+      if (dpf_operator == 'compact') then
+        y = yc
+      else                                           ! wide (+ eps compact); compact rows in the edge band
+        do jb_ = 1, nBlock
+          ib_ = iBlockList_I(jb_)
+          do k_ = 1, nb(3)
+            do j_ = 1, nb(2)
+              if (edge(j_, k_, ib_)) then
+                y(:, j_, k_, ib_) = yc(:, j_, k_, ib_)
+              else
+                y(:, j_, k_, ib_) = y(:, j_, k_, ib_) + dpf_eps*yc(:, j_, k_, ib_)
+              end if
+            end do
+          end do
+        end do
+      end if
+    end subroutine apply_A
+    ! The wide operator: B = -grad x with the code's stencils in the solve
+    ! cells (x in psi; below the join x continued, with the CZ's B_r if
+    ! full, flat if not; odd above k_ss), its ghosts filled (the CZ's B below
+    ! the join if full, 0 if not; above k_ss B_r even, B_h odd), then
+    ! y = -V div B (V the cell volume): y = V div(grad x) for the homogeneous
+    ! part. full: x = 0 gives -V div B of the CZ's field alone (-b)
+    subroutine wide_op(xin, y, full)
+      real(dp), intent(in) :: xin(:,:,:,:)
+      real(dp), intent(out) :: y(:,:,:,:)
+      logical, intent(in) :: full
+      integer :: jb_, ib_, i_, j_, k_, m_
+      real(dp) :: vol
+      do jb_ = 1, nBlock
+        ib_ = iBlockList_I(jb_)
+        if (in_solve(ib_)) then
+          State_GVB(1:nb(1), 1:nb(2), 1:nb(3), psi_, ib_) = xin(:, :, :, ib_)
+        else if (Key_IB(KI+1, ib_)*nb(1) >= k_join) then
+          State_GVB(1:nb(1), 1:nb(2), 1:nb(3), psi_, ib_) = 0.0_dp
+        end if
+      end do
+      call arbor_fill_ghosts(State_GVB, iVarMin=psi_, iVarMax=psi_)
+      do jb_ = 1, nBlock
+        ib_ = iBlockList_I(jb_)
+        call cz_bind(ib_)
+        if (.not. in_solve(ib_)) cycle
+        if (r_off == k_join) then
+          if (full) then
+            State_GVB(0, :, :, psi_, ib_) = State_GVB(1, :, :, psi_, ib_) &
+                + State_GVB(0, :, :, br_, ib_)*(r_c(0)/r_f(0))**2*(r_c(1) - r_c(0))
+            State_GVB(-1, :, :, psi_, ib_) = State_GVB(0, :, :, psi_, ib_) + State_GVB(0, :, :, br_, ib_)*(r_c(0) - r_c(-1))
+          else
+            State_GVB(0, :, :, psi_, ib_) = State_GVB(1, :, :, psi_, ib_)
+            State_GVB(-1, :, :, psi_, ib_) = State_GVB(1, :, :, psi_, ib_)
+          end if
+        end if
+        if (r_off + nb(1) == k_ss) then
+          State_GVB(nb(1)+1, :, :, psi_, ib_) = -State_GVB(nb(1), :, :, psi_, ib_)
+          State_GVB(nb(1)+2, :, :, psi_, ib_) = -State_GVB(nb(1)-1, :, :, psi_, ib_)
+        end if
+        call ddr_block(State_GVB(:, :, :, psi_, ib_), Dr_C)
+        State_GVB(1:nb(1), 1:nb(2), 1:nb(3), br_, ib_) = -Dr_C
+        call arbor_deriv_cell(State_GVB, psi_, 2, ib_, D_C)
+        do i_ = 1, nb(1)
+          State_GVB(i_, 1:nb(2), 1:nb(3), bt_, ib_) = -D_C(i_, :, :)/r_c(i_)
+        end do
+        call arbor_deriv_cell(State_GVB, psi_, 3, ib_, D_C)
+        associate (th => Metric_DB(2, ib_)%X_I)
+          do j_ = 1, nb(2)
+            do i_ = 1, nb(1)
+              State_GVB(i_, j_, 1:nb(3), bp_, ib_) = -D_C(i_, j_, :)/(r_c(i_)*sin(th(j_)))
+            end do
+          end do
+        end associate
+      end do
+      call cz_unbind()
+      call arbor_fill_ghosts(State_GVB, iVarMin=br_, iVarMax=bp_)
+      y = 0.0_dp
+      do jb_ = 1, nBlock
+        ib_ = iBlockList_I(jb_)
+        call cz_bind(ib_)
+        if (.not. in_solve(ib_)) cycle
+        if (r_off == k_join .and. .not. full) State_GVB(-1:0, :, :, br_:bp_, ib_) = 0.0_dp
+        if (r_off + nb(1) == k_ss) then
+          do m_ = 1, 2
+            State_GVB(nb(1)+m_, :, :, br_, ib_) = State_GVB(nb(1)+1-m_, :, :, br_, ib_)
+            State_GVB(nb(1)+m_, :, :, bt_:bp_, ib_) = -State_GVB(nb(1)+1-m_, :, :, bt_:bp_, ib_)
+          end do
+        end if
+        call div_block(State_GVB(:, :, :, br_:bp_, ib_), ib_, divB_C)
+        associate (vt => Metric_DB(2, ib_)%Vol_I, vp => Metric_DB(3, ib_)%Vol_I)
+          do k_ = 1, nb(3)
+            do j_ = 1, nb(2)
+              do i_ = 1, nb(1)
+                vol = (r_f(i_)**3 - r_f(i_-1)**3)/3.0_dp*vt(j_)*vp(k_)
+                y(i_, j_, k_, ib_) = -vol*divB_C(i_, j_, k_)
+              end do
+            end do
+          end do
+        end associate
+      end do
+      call cz_unbind()
+    end subroutine wide_op
+    ! z = M^-1 r: per column of each block, the radial tridiagonal part of A
+    ! (the couplings out of the block dropped, the diagonal kept whole)
+    subroutine precond(rin, z)
+      real(dp), intent(in) :: rin(:,:,:,:)
+      real(dp), intent(out) :: z(:,:,:,:)
+      real(dp) :: dd(nb(1)), lo(nb(1)), up(nb(1)), cp(nb(1)), dp_(nb(1)), m_
+      integer :: jb_, ib_, i_, j_, k_
+      z = 0.0_dp
+      do jb_ = 1, nBlock
+        ib_ = iBlockList_I(jb_)
+        if (.not. in_solve(ib_)) cycle
+        do k_ = 1, nb(3)
+          do j_ = 1, nb(2)
+            do i_ = 1, nb(1)
+              associate (c => Cf(i_, j_, k_, :, ib_))
+                dd(i_) = -(c(1) + c(2) + c(3) + c(4) + c(5) + c(6))
+                lo(i_) = merge(c(1), 0.0_dp, i_ > 1)
+                up(i_) = merge(c(2), 0.0_dp, i_ < nb(1))
+              end associate
+            end do
+            ! Thomas
+            cp(1) = up(1)/dd(1)
+            dp_(1) = rin(1, j_, k_, ib_)/dd(1)
+            do i_ = 2, nb(1)
+              m_ = dd(i_) - lo(i_)*cp(i_-1)
+              cp(i_) = up(i_)/m_
+              dp_(i_) = (rin(i_, j_, k_, ib_) - lo(i_)*dp_(i_-1))/m_
+            end do
+            z(nb(1), j_, k_, ib_) = dp_(nb(1))
+            do i_ = nb(1) - 1, 1, -1
+              z(i_, j_, k_, ib_) = dp_(i_) - cp(i_)*z(i_+1, j_, k_, ib_)
+            end do
+          end do
+        end do
+      end do
+    end subroutine precond
+  end subroutine dpf_solve
+
+  ! The field's curl and divergence (the code's stencils, ghosts filled) as
+  ! q = |curl B| r dtheta/|B| and |div B| r dtheta/|B| (B^2-weighted rms;
+  ! max of q) in the atmosphere cells whose stencils stay above the join and
+  ! below 0.95 rss, patch interior / patch edge (within 2.5 cells of the
+  ! Yin-Yang boundary), z < 5 Mm, 5-50 Mm, > 50 Mm
+  subroutine b_field_stats(label, rss)
+    character(len=*), intent(in) :: label
+    real(dp), intent(in) :: rss
+    real(dp) :: acc(4, 2, 3), th, ph, dth, dph, q, b2, z, c2, d2, rj
+    integer :: jb, ib, i, j, k, ireg, ih
+    character(len=200) :: msg
+    character(len=8), parameter :: rname(2) = ['interior', 'edge    ']
+    character(len=10), parameter :: hname(3) = ['z<5Mm     ', '5-50Mm    ', 'z>50Mm    ']
+    call cz_unbind()
+    rj = r_f(k_join)
+    call arbor_fill_ghosts(State_GVB)
+    acc = 0.0_dp
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      if (r_off + nb(1) <= k_join) cycle
+      B_GV = State_GVB(:, :, :, br_:bp_, ib)
+      call curl_block(B_GV, ib, J_CV)
+      call div_block(State_GVB(:, :, :, br_:bp_, ib), ib, divB_C)
+      dth = Metric_DB(2, ib)%Dx_I(1)
+      dph = Metric_DB(3, ib)%Dx_I(1)
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          th = Metric_DB(2, ib)%X_I(j)
+          ph = Metric_DB(3, ib)%X_I(k)
+          ireg = 1
+          if (th < 0.25_dp*pi + 2.5_dp*dth .or. th > 0.75_dp*pi - 2.5_dp*dth .or. &
+              abs(ph) > 0.75_dp*pi - 2.5_dp*dph) ireg = 2
+          do i = 1, nb(1)
+            if (r_off + i < k_join + 3 .or. r_c(i) > 0.95_dp*rss) cycle
+            z = r_c(i) - rj
+            ih = 1
+            if (z > 5.0e8_dp) ih = 2
+            if (z > 5.0e9_dp) ih = 3
+            b2 = sum(State_GVB(i, j, k, br_:bp_, ib)**2)
+            if (b2 <= 0.0_dp) cycle
+            c2 = sum(J_CV(i, j, k, :)**2)*(r_c(i)*dth)**2
+            d2 = (divB_C(i, j, k)*r_c(i)*dth)**2
+            q = sqrt(c2/b2)
+            acc(:, ireg, ih) = [acc(1, ireg, ih) + b2, acc(2, ireg, ih) + c2, max(acc(3, ireg, ih), q), acc(4, ireg, ih) + d2]
+          end do
+        end do
+      end do
+    end do
+    call cz_unbind()
+    do ih = 1, 3
+      do ireg = 1, 2
+        acc(1, ireg, ih) = arbor_sum(acc(1, ireg, ih))
+        acc(2, ireg, ih) = arbor_sum(acc(2, ireg, ih))
+        acc(3, ireg, ih) = arbor_max(acc(3, ireg, ih))
+        acc(4, ireg, ih) = arbor_sum(acc(4, ireg, ih))
+        write(msg, '(A,A,1X,A,1X,A,A,ES10.3,A,ES10.3,A,ES10.3)') '  field ', label, rname(ireg), hname(ih), &
+            ': rms |curl B| r dth/|B| ', sqrt(acc(2, ireg, ih)/max(acc(1, ireg, ih), tiny(1.0_dp))), &
+            '  max ', acc(3, ireg, ih), '  rms |div B| r dth/|B| ', sqrt(acc(4, ireg, ih)/max(acc(1, ireg, ih), tiny(1.0_dp)))
+        call arbor_print(msg)
+      end do
+    end do
+  end subroutine b_field_stats
 
   ! ---------------------------------------------------------------- state transfer
 
