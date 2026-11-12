@@ -1,0 +1,39 @@
+! Frozen-CZ relaxation of the atmosphere over the real field, at 1.875 deg on
+! the Studio (CZ_3D's mhd5 state at day 65.3, coarsened to 1.875 deg by
+! tools/coarsen_export.py from the 0.47 deg export, CZ_3D/runs/export_mhd5.nml):
+! the CZ blocks imported (frozen), the atmosphere from data/init_wind20_dip.dat
+! (one profile everywhere), the field above the join the PFSS of the CZ's
+! photospheric B_r (l_max = pi/dtheta = 96; 28% of rms B_r is single-cell
+! structure no l fits: GLM cleans that jump). Local time stepping, no cap in
+! the atmosphere (dt1, dt_max large). A 60-step laptop test: stable, div B
+! 5e-3 and falling, but v_h growing to 330 km/s and dt falling 0.093 -> 0.064
+! s: is the transient saturating? (profiles every 200 steps). ~1.5 s per step
+! on 8 ranks. Before it: tools/coarsen_export.py <CZ_3D export_mhd5> <..._1875>.
+!   mpirun -np 8 ./cztr3d.x runs/real1875_relax.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  import_dir = '../CZ_3D/output_stampede3/export_mhd5_1875'
+  out_dir = 'output/real1875_relax'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 0, nb_r = 28
+  use_atmosphere = .true., freeze_cz = .true.
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'pfss', b_seed_rss_rsun = 2.5
+  b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  va_dt_target = 0.3, va_floor_cs = 1.5
+  cond_along_b = .true., b_iso_G = 1.0e-3
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11
+  dt1 = 1.0e4
+  t_end = 1.0e9, n_step_max = 10000, dt_max = 1.0e4
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 60.0
+  plot_at_end = .true.
+/

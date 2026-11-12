@@ -487,7 +487,7 @@ contains
     end do
     dth = arbor_min(dth)
     lmx = pfss_lmax
-    if (lmx <= 0) lmx = nint(0.5_dp*pi/dth)
+    if (lmx <= 0) lmx = nint(pi/dth)
     allocate(c(0:lmx, 0:lmx), s(0:lmx, 0:lmx), dc(0:lmx, 0:lmx), ds(0:lmx, 0:lmx), p(0:lmx, 0:lmx), dpt(0:lmx, 0:lmx), &
         Sl(0:lmx), Tl(0:lmx), Ul(0:lmx), fr(0:lmx, nb(1)), gh(0:lmx, nb(1)), frs(0:lmx), ghs(0:lmx), cmp(0:lmx), smp(0:lmx))
     c = 0.0_dp

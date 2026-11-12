@@ -222,13 +222,15 @@ module cz3d_params_mod
   ! potential field (source surface b_seed_rss_rsun, radial above it) of the
   ! B_r of the join cell (the CZ's own field, e.g. imported), after the
   ! blocks are set up (fresh start, import, or a hydrodynamic restart);
-  ! harmonics to l = pfss_lmax (0: pi/(2 dtheta) of the finest cells, 192 at
-  ! 0.47 deg), the quadrature fit refined pfss_iter times on its residual
-  ! (runs/pfss_check.nml: exact to round-off at pi/(2 dtheta) after 6 passes;
-  ! at pi/dtheta the Yin-Yang midpoint sums alias and the passes converge
-  ! slowly); the monopole is dropped. What the harmonics miss (~2-cell
-  ! scales) stays as a B_r jump at the join (reported as the residual; GLM
-  ! cleans it).
+  ! harmonics to l = pfss_lmax (0: pi/dtheta of the finest cells, 96 at
+  ! 1.875 deg, 384 at 0.47 deg), the quadrature fit refined pfss_iter times on
+  ! its residual; the monopole is dropped. Accuracy (runs/pfss_check.nml,
+  ! dipole): round-off at pi/(2 dtheta), ~1e-3 at pi/dtheta (the Yin-Yang
+  ! midpoint sums alias near the grid scale). The full pi/dtheta is needed for
+  ! a CZ field: mhd5 coarsened to 1.875 deg leaves 73% of rms B_r unfitted at
+  ! l = 48 and 28% at l = 96 (single-cell flux concentrations, no l can fit
+  ! them); that part stays as a B_r jump at the join (the residual on the
+  ! 'pfss: ... pass' lines), for GLM to clean.
   ! pfss_check (a test): the CZ field is first set to the 'dipole' seed
   ! (b_seed_G) and the PFSS result compared with it
   character(len=12) :: b_seed = 'none'
