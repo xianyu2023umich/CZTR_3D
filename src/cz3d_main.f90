@@ -88,7 +88,7 @@ program cz3d_run
       call arbor_restart_read(app, restart_from, dom, tree, t, i_step, domain_tol=restart_domain_tol)
       n_var_file = cz_n_var()
     end if
-    call arbor_ghost_build(tree, dom, bc=wall_bc)
+    call arbor_ghost_build(tree, dom, bc=wall_bc, bounded=.true.)   ! no negative Yin-Yang ghosts (ARBOR 831b389)
     call cz_setup()
     if (n_var_file < cz_n_var()) call cz_field_from_hydro()
     if (tloc(1) < 0.0_dp) tloc = t                        ! (no shell clocks in the file: all at the run's time)
@@ -108,7 +108,7 @@ program cz3d_run
     call arbor_tree_init(tree, dom, [0, max(refine_h, patch_level), max(refine_h, patch_level)])
     call arbor_tree_refine(tree, dom, import_criterion)
     call arbor_block_sync(tree)
-    call arbor_ghost_build(tree, dom, bc=wall_bc)
+    call arbor_ghost_build(tree, dom, bc=wall_bc, bounded=.true.)   ! no negative Yin-Yang ghosts (ARBOR 831b389)
     call cz_setup()
     call arbor_init_blocks(app)
     t = 0.0_dp
@@ -120,7 +120,7 @@ program cz3d_run
   else
     call arbor_tree_init(tree, dom, [0, 0, 0])
     call arbor_block_sync(tree)
-    call arbor_ghost_build(tree, dom, bc=wall_bc)
+    call arbor_ghost_build(tree, dom, bc=wall_bc, bounded=.true.)   ! no negative Yin-Yang ghosts (ARBOR 831b389)
     call cz_setup()
     call arbor_init_blocks(app)
     t = 0.0_dp
