@@ -1,0 +1,42 @@
+! The real field at 1.875 deg without friction, from the start: CZ_3D's mhd5
+! state at day 65.3 (the 0.47 deg export coarsened by tools/coarsen_export.py,
+! frozen), the atmosphere one profile everywhere with the TR-margin background
+! (data/init_wind20_dip_m600.dat), and the field above the join the discrete
+! potential field (b_seed = 'dpf', compact operator: B_r continuous with the CZ
+! at all scales, curl free on the grid inside the patches; the l = 96 PFSS only
+! as the solver's start; ~45 s on 8 ranks). Bounded Yin-Yang ghosts (ARBOR
+! 831b389, always on): the negative-density corner ghosts that ended
+! real1875_relax_cont are gone (notes/yy_ghost_negative_density.md). Local time
+! stepping, no cap in the atmosphere. Expect in the first steps grid-scale
+! flows of up to ~50 km/s at 2-5 Mm (40-step tests: the compact field's div B
+! near the photosphere). ~1.5 s per step on 8 ranks; profiles every 200
+! steps, a restart every 60 s of model time (~800 steps), a plt at the end.
+! Needs ../CZ_3D/output_stampede3/export_mhd5_1875 (as real1875_relax).
+!   mpirun -np 8 ./cztr3d.x runs/real1875_dpf.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  import_dir = '../CZ_3D/output_stampede3/export_mhd5_1875'
+  out_dir = 'output/real1875_dpf'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 0, nb_r = 28
+  use_atmosphere = .true., freeze_cz = .true.
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'dpf', pfss_lmax = 96, b_seed_rss_rsun = 2.5
+  b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  va_dt_target = 0.3, va_floor_cs = 1.5
+  cond_along_b = .true., b_iso_G = 1.0e-3
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11
+  dt1 = 1.0e4
+  t_end = 1.0e9, n_step_max = 10000, dt_max = 1.0e4
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 60.0
+  plot_at_end = .true.
+/
