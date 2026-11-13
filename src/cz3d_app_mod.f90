@@ -631,6 +631,7 @@ contains
     if (dpf_check) call dpf_check_run(phi_B, rss)
     if (b_seed == 'dpf') then
       call dpf_solve(phi_B, k_ss)
+      if (mf_iter > 0) call mf_relax(r_f(k_ss))
       if (pfss_check) then                           ! the solved field against the analytic dipole (below 0.95 r_ss)
         err = 0.0_dp
         do jb = 1, nBlock
@@ -1251,6 +1252,110 @@ contains
       end do
     end do
   end subroutine b_field_stats
+
+  ! Magnetofriction (mf_iter > 0, after b_seed = 'dpf'; see cz3d_params_mod):
+  ! the field in the atmosphere cells below rss moved towards zero J x B as
+  ! the code computes it, the gas frozen. The displacement d is stored in the
+  ! velocity slots (0 elsewhere) for the ghost fill; v and psi restored after.
+  subroutine mf_relax(rss)
+    real(dp), intent(in) :: rss
+    real(dp), allocatable :: Vsave(:,:,:,:,:)
+    real(dp) :: b(3), jj(3), f(3), h(3), b2, b2m, dmax, fsum(4), fe, t0
+    integer :: it, jb, ib, i, j, k
+    logical :: edg
+    character(len=200) :: msg
+    t0 = arbor_wtime()
+    call cz_unbind()
+    allocate(Vsave(nb(1), nb(2), nb(3), 3, nBlockMax))
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      Vsave(:, :, :, :, ib) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_:vp_, ib)
+    end do
+    call b_field_stats('before mf', rss)
+    do it = 1, mf_iter
+      call arbor_fill_ghosts(State_GVB)
+      dmax = 0.0_dp
+      fsum = 0.0_dp                ! sum B^2 and sum (|F| h/B^2)^2 B^2, interior / edge
+      do jb = 1, nBlock
+        ib = iBlockList_I(jb)
+        call cz_bind(ib)
+        State_GVB(:, :, :, vr_:vp_, ib) = 0.0_dp
+        if (r_off + nb(1) <= k_join) cycle
+        B_GV = State_GVB(:, :, :, br_:bp_, ib)
+        call curl_block(B_GV, ib, J_CV)
+        associate (th => Metric_DB(2, ib)%X_I, dth => Metric_DB(2, ib)%Dx_I, ph => Metric_DB(3, ib)%X_I, &
+            dph => Metric_DB(3, ib)%Dx_I)
+          b2m = 0.0_dp
+          do k = 1, nb(3)
+            do j = 1, nb(2)
+              edg = th(j) < 0.25_dp*pi + 2.5_dp*dth(j) .or. th(j) > 0.75_dp*pi - 2.5_dp*dth(j) &
+                  .or. abs(ph(k)) > 0.75_dp*pi - 2.5_dp*dph(k)
+              do i = 1, nb(1)
+                if (r_off + i <= k_join .or. r_c(i) > rss) cycle
+                b = State_GVB(i, j, k, br_:bp_, ib)
+                jj = J_CV(i, j, k, :)
+                b2 = sum(b**2) + 1.0e-6_dp
+                f = [jj(2)*b(3) - jj(3)*b(2), jj(3)*b(1) - jj(1)*b(3), jj(1)*b(2) - jj(2)*b(1)]
+                h = [r_f(i) - r_f(i-1), r_c(i)*dth(j), r_c(i)*sin(th(j))*dph(k)]
+                State_GVB(i, j, k, vr_:vp_, ib) = mf_alpha*minval(h)**2*f/b2   ! (isotropic: the step limited by the smallest scale)
+                dmax = max(dmax, maxval(abs(State_GVB(i, j, k, vr_:vp_, ib)))/minval(h))
+                fe = sum(f**2)*minval(h)**2/b2         ! (|F| h_min/B^2)^2 B^2
+                if (edg) then
+                  fsum(3:4) = fsum(3:4) + [b2, fe]
+                else
+                  fsum(1:2) = fsum(1:2) + [b2, fe]
+                end if
+              end do
+            end do
+          end do
+        end associate
+      end do
+      call cz_unbind()
+      call arbor_fill_ghosts(State_GVB, iVarMin=vr_, iVarMax=vp_)
+      ! B += curl(d x B) in the relaxed cells
+      do jb = 1, nBlock
+        ib = iBlockList_I(jb)
+        call cz_bind(ib)
+        if (r_off + nb(1) <= k_join) cycle
+        do k = 1 - ng, nb(3) + ng
+          do j = 1 - ng, nb(2) + ng
+            do i = 1 - ng, nb(1) + ng
+              jj = State_GVB(i, j, k, vr_:vp_, ib)
+              b = State_GVB(i, j, k, br_:bp_, ib)
+              B_GV(i, j, k, :) = [jj(2)*b(3) - jj(3)*b(2), jj(3)*b(1) - jj(1)*b(3), jj(1)*b(2) - jj(2)*b(1)]
+            end do
+          end do
+        end do
+        call curl_block(B_GV, ib, C_CV)
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            do i = 1, nb(1)
+              if (r_off + i <= k_join .or. r_c(i) > rss) cycle
+              State_GVB(i, j, k, br_:bp_, ib) = State_GVB(i, j, k, br_:bp_, ib) + C_CV(i, j, k, :)
+            end do
+          end do
+        end do
+      end do
+      call cz_unbind()
+      if (it == 1 .or. mod(it, 25) == 0 .or. it == mf_iter) then
+        fsum(1) = arbor_sum(fsum(1));  fsum(2) = arbor_sum(fsum(2))
+        fsum(3) = arbor_sum(fsum(3));  fsum(4) = arbor_sum(fsum(4))
+        dmax = arbor_max(dmax)
+        write(msg, '(A,I5,A,ES10.3,A,ES10.3,A,ES10.3)') '  mf: iteration ', it, ': rms |J x B| h/B^2 interior ', &
+            sqrt(fsum(2)/max(fsum(1), tiny(1.0_dp))), ', edge ', sqrt(fsum(4)/max(fsum(3), tiny(1.0_dp))), &
+            ', max step/h ', dmax
+        call arbor_print(msg)
+      end if
+    end do
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_:vp_, ib) = Vsave(:, :, :, :, ib)
+    end do
+    call arbor_fill_ghosts(State_GVB)
+    write(msg, '(A,I0,A,F8.2,A)') '  mf: ', mf_iter, ' iterations, ', arbor_wtime() - t0, ' s'
+    call arbor_print(msg)
+    call b_field_stats('after mf', rss)
+  end subroutine mf_relax
 
   ! ---------------------------------------------------------------- state transfer
 

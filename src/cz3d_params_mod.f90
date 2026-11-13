@@ -278,6 +278,20 @@ module cz3d_params_mod
   ! scale oscillations of Phi that the ghost interpolation turns into field;
   ! 40-step tests: v_h > 100 km/s in the outermost patch cells); 0 = none
   real(dp) :: dpf_edge_cells = 2.5_dp
+  ! magnetofriction after the 'dpf' field (mf_iter > 0): the field above the
+  ! join (below the source surface) relaxed towards zero Lorentz force as the
+  ! code computes it (its curl, its ghost fill: the Yin-Yang edges included),
+  ! the gas frozen: B += curl(d x B), d = mf_alpha h_d^2 (J x B)_d/B^2 per
+  ! direction (h the cell size: dr, r dtheta, r sin(theta) dphi); the CZ
+  ! (and so B_r at the join) fixed
+  ! the slope limiter of the ghost interpolation (Yin-Yang overlap,
+  ! refinement): 'minmod' (ARBOR's default), 'mc', or 'none' (central slopes,
+  ! linear: smoother field at the patch edges, no protection at steep fronts).
+  ! 40-step tests from the compact 'dpf' field: max v_h at the patch edges at
+  ! 5 Mm 53 (minmod), 41 (none), 62 km/s (mc); elsewhere no difference
+  character(len=8) :: ghost_limiter = 'minmod'
+  integer :: mf_iter = 0
+  real(dp) :: mf_alpha = 0.05_dp
 
   ! --- state transfer between runs with different variable sets (ARBOR's
   !     restart files hold a fixed number of variables): export_state writes
@@ -371,7 +385,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -403,6 +417,8 @@ contains
     if (glm_ch /= 'fast' .and. glm_ch /= 'cfl') call arbor_abort('glm_ch must be fast or cfl')
     if (b_seed /= 'none' .and. b_seed /= 'toroidal' .and. b_seed /= 'dipole' .and. b_seed /= 'pfss' &
         .and. b_seed /= 'dpf') call arbor_abort('b_seed must be none, toroidal, dipole, pfss or dpf')
+    if (ghost_limiter /= 'minmod' .and. ghost_limiter /= 'mc' .and. ghost_limiter /= 'none') &
+        call arbor_abort('ghost_limiter must be minmod, mc or none')
     if (dpf_operator /= 'wide' .and. dpf_operator /= 'compact') call arbor_abort('dpf_operator must be wide or compact')
     if ((b_seed == 'pfss' .or. b_seed == 'dpf') .and. .not. (use_B .and. use_atmosphere)) &
         call arbor_abort('b_seed = pfss or dpf needs use_B and use_atmosphere (the field above the join)')

@@ -73,6 +73,10 @@ program cz3d_run
     call arbor_set_vectors([vr_])
   end if
   call arbor_block_init(dom, n_var=cz_n_var(), n_var_face=merge(1, 0, qconv_face))
+  select case (ghost_limiter)                      ! (the ghost interpolation's slope limiter)
+  case ('mc');   iLimiter = LIMITER_MC
+  case ('none'); iLimiter = LIMITER_NONE
+  end select
   if (len_trim(restart_from) > 0) then
     ! tree, blocks, time, step and the profile counter from the file
     ! with use_B the file may be hydrodynamic (fewer variables): B and psi
