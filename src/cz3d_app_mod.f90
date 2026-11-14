@@ -1730,10 +1730,18 @@ contains
     dt_now = dt
     if (freeze_cz) then
       do jb = 1, size(iBlocks)
-        if (frz_have(iBlocks(jb))) cycle
-        frz_B(:, :, :, :, iBlocks(jb)) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), 1:nv, iBlocks(jb))
-        frz_have(iBlocks(jb)) = .true.
+        ib = iBlocks(jb)
+        if (frz_have(ib)) cycle
+        if (freeze_cz_mode == 'line_tied') then       ! a static CZ: v = 0 in its cells, from now on
+          call cz_bind(ib)
+          do i = 1, min(nb(1), k_join - r_off)
+            State_GVB(i, 1:nb(2), 1:nb(3), vr_:vp_, ib) = 0.0_dp
+          end do
+        end if
+        frz_B(:, :, :, :, ib) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), 1:nv, ib)
+        frz_have(ib) = .true.
       end do
+      call cz_unbind()
     end if
     if (lz_correct_steps > 0 .or. lz_correct_dt > 0.0_dp) call lz_impulse(dt)
     ! Coriolis split: half a rotation first (also of StateOld, the RK stages' base)
@@ -1816,7 +1824,12 @@ contains
       do jb = 1, size(iBlocks)
         call cz_bind(iBlocks(jb))
         do i = 1, min(nb(1), k_join - r_off)
-          State_GVB(i, 1:nb(2), 1:nb(3), 1:nv, iBlocks(jb)) = frz_B(i, :, :, :, iBlocks(jb))
+          if (freeze_cz_mode == 'line_tied' .and. use_B .and. r_off + i > k_join - freeze_float_cells) then
+            ! (the top cells: B_theta, B_phi and psi float)
+            State_GVB(i, 1:nb(2), 1:nb(3), 1:br_, iBlocks(jb)) = frz_B(i, :, :, 1:br_, iBlocks(jb))
+          else
+            State_GVB(i, 1:nb(2), 1:nb(3), 1:nv, iBlocks(jb)) = frz_B(i, :, :, :, iBlocks(jb))
+          end if
         end do
       end do
       call cz_unbind()

@@ -1,8 +1,8 @@
 ! Smoke test (make smoke, or a short batch job): runs/full100.nml for 300
 ! steps from the static start (1.0 R, 1.875 deg, 111 radial cells), no
 ! restarts. On 8 ranks it ends with
-!   state checksum: 38440707489373
-! with gfortran 14 on macOS (Apple silicon), ARBOR's opt flags, eos_hhe from
+!   state checksum: 36130614776820
+! with gfortran 14 on macOS (Apple silicon), ARBOR's opt flags (bounded Yin-Yang ghosts, ARBOR 831b389), eos_hhe from
 ! 2026-10-22 on and Accelerate's array exp/log (src/vmath_accelerate.f90); other
 ! compilers or platforms: compare log.txt with output/smoke/log.txt of a
 ! reference run (steps 100-300: L_top 0.95432 0.95648 0.95705).

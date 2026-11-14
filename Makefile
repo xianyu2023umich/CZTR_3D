@@ -87,7 +87,7 @@ run: $(EXE)
 # this machine; on a cluster submit runs/smoke.nml as a short batch job
 smoke: $(EXE)
 	mpirun -np 8 ./$(EXE) runs/smoke.nml | grep -E "^step +[123]00|done:|checksum"
-	@echo "expected (gfortran 14, macOS): state checksum: 38440707489373"
+	@echo "expected (gfortran 14, macOS): state checksum: 36130614776820"
 
 # ---- generated inputs ----
 ENV     = tools/envelope

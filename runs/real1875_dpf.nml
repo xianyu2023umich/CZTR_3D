@@ -7,7 +7,10 @@
 ! as the solver's start; ~45 s on 8 ranks). Bounded Yin-Yang ghosts (ARBOR
 ! 831b389, always on): the negative-density corner ghosts that ended
 ! real1875_relax_cont are gone (notes/yy_ghost_negative_density.md). Local time
-! stepping, no cap in the atmosphere. Expect in the first steps grid-scale
+! stepping, no cap in the atmosphere. The frozen CZ is a static, line-tied
+! photosphere (freeze_cz_mode = 'line_tied', the default since 2026-11-13: v = 0,
+! B_r fixed, B_h and psi free in its top 2 cells; the old 'all' froze the
+! convective v, whose v x B sheared the field above at ~1 G/s, and pinned B_h). Expect in the first steps grid-scale
 ! flows of up to ~50 km/s at 2-5 Mm (40-step tests: the compact field's div B
 ! near the photosphere). ~1.5 s per step on 8 ranks; profiles every 200
 ! steps, a restart every 60 s of model time (~800 steps), a plt at the end.

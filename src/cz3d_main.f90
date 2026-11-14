@@ -142,6 +142,11 @@ program cz3d_run
         ', losses ', use_losses, ', heating ', use_heating, '; switch at z = ', z_atm_km, ' km, width ', w_atm_km, &
         ' km; H_peak ', H_peak, ', z_heat ', z_heat_km, ' km; CZ frozen ', freeze_cz
     call arbor_print(msg)
+    if (freeze_cz) then
+      write(msg, '(A,A,A,I0,A)') '  frozen CZ: ', trim(freeze_cz_mode), ' (', freeze_float_cells, &
+          ' top cells with B_theta, B_phi and psi free in line_tied mode)'
+      call arbor_print(msg)
+    end if
   end if
   write(msg, '(A,F9.1,A,F9.1,A,A,A,A,A,L1,A,F5.2)') '  r from ', (r_f(0) - r_top_cz)/1.0e5_dp, ' to ', &
       (r_f(n_r) - r_top_cz)/1.0e5_dp, ' km; walls: bottom ', trim(wall_bottom), ', top ', trim(wall_top), &
