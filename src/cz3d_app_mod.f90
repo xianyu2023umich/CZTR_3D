@@ -133,6 +133,7 @@ module cz3d_app_mod
   logical :: at_bottom = .true., at_top = .true.
   ! freeze_cz: each block's state at its first step (cells r_off + i <= k_join restored after every step)
   real(dp), allocatable :: frz_B(:,:,:,:,:)
+  logical :: join_wall_lo = .false., join_wall_hi = .false.   ! (cz_bind: the join as a face wall for the mass flux, ghost mode)
   logical, allocatable :: frz_have(:)
   real(dp), allocatable :: work_CB(:,:,:,:)       ! W per cell from the step's first RK stage
   real(dp), allocatable :: workh_CB(:,:,:,:)      ! its horizontal pressure part -v_h.grad_h p1
@@ -208,6 +209,8 @@ contains
     col_bottom = at_bottom
     col_top = at_top
     if (use_atmosphere) col_top = Key_IB(KI+1, ib)*nb(1) + nb(1) == k_join   ! (grey and MLT end at the join)
+    join_wall_lo = freeze_cz_mode == 'ghost' .and. freeze_side == 'cz' .and. Key_IB(KI+1, ib)*nb(1) == k_join
+    join_wall_hi = freeze_cz_mode == 'ghost' .and. freeze_side == 'atmosphere' .and. Key_IB(KI+1, ib)*nb(1) + nb(1) == k_join
   end subroutine cz_bind
 
   subroutine cz_unbind()
@@ -217,7 +220,58 @@ contains
     at_top = .true.
     col_bottom = .true.
     col_top = .true.
+    join_wall_lo = .false.
+    join_wall_hi = .false.
   end subroutine cz_unbind
+
+  ! freeze_side: is block ib on the frozen side (the join is a block face)?
+  logical function block_frozen(ib)
+    integer, intent(in) :: ib
+    integer :: lo
+    lo = Key_IB(KI+1, ib)*nb(1)
+    select case (freeze_side)
+    case ('cz');         block_frozen = lo + nb(1) <= k_join
+    case ('atmosphere'); block_frozen = lo >= k_join
+    case default;        block_frozen = .false.
+    end select
+  end function block_frozen
+
+  ! ghost mode: the frozen side's blocks are not computed
+  logical function skip_frozen(ib)
+    integer, intent(in) :: ib
+    skip_frozen = freeze_cz_mode == 'ghost' .and. block_frozen(ib)
+  end function skip_frozen
+
+  ! freeze_cz_mode = 'ghost': after a ghost fill, the evolving side's radial
+  ! ghost cells at the join (see freeze_cz_mode): v odd, B_theta, B_phi, psi
+  ! even; for freeze_side = 'atmosphere' also rho1 (relative to rho0) and s1
+  ! even (a wall); B_r (and for 'cz' rho1, s1) keep the frozen side's values
+  ! from the fill
+  subroutine join_bc()
+    integer :: jb, ib, g, d, s, m, o, v
+    if (freeze_side == 'none' .or. freeze_cz_mode /= 'ghost') return
+    m = nb(1)
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      o = Key_IB(KI+1, ib)*m
+      if (freeze_side == 'cz' .and. o == k_join) then
+        do g = 1, 2
+          d = 1 - g;  s = g                           ! ghost 0 <- cell 1, ghost -1 <- cell 2
+          State_GVB(d, :, :, vr_:vp_, ib) = -State_GVB(s, :, :, vr_:vp_, ib)
+          if (use_B) State_GVB(d, :, :, bt_:psi_, ib) = State_GVB(s, :, :, bt_:psi_, ib)
+        end do
+      else if (freeze_side == 'atmosphere' .and. o + m == k_join) then
+        do g = 1, 2
+          d = m + g;  s = m + 1 - g                   ! ghost m+1 <- cell m, ghost m+2 <- cell m-1
+          State_GVB(d, :, :, vr_:vp_, ib) = -State_GVB(s, :, :, vr_:vp_, ib)
+          if (use_B) State_GVB(d, :, :, bt_:psi_, ib) = State_GVB(s, :, :, bt_:psi_, ib)
+          State_GVB(d, :, :, s1_, ib) = State_GVB(s, :, :, s1_, ib)
+          State_GVB(d, :, :, rho1_, ib) = State_GVB(s, :, :, rho1_, ib) &
+              *(rq_w(o+s)*rho0_w(o+d))/(rq_w(o+d)*rho0_w(o+s))
+        end do
+      end if
+    end do
+  end subroutine join_bc
 
   subroutine column_views(o, m)
     integer, intent(in) :: o, m
@@ -267,7 +321,7 @@ contains
     rsst_h2015 = rsst_form == 'hotta2015'
     if (use_atmosphere) call atm_setup()
     if (allocated(frz_B)) deallocate(frz_B, frz_have)
-    if (freeze_cz) then
+    if (freeze_side /= 'none') then
       allocate(frz_B(nb(1), nb(2), nb(3), cz_n_var(), nBlockMax), frz_have(nBlockMax))
       frz_have = .false.
     end if
@@ -1624,6 +1678,12 @@ contains
         W(1, :, :) = 0.0_dp;  W(0, :, :) = -W(2, :, :);  W(-1, :, :) = -W(3, :, :)
       end if
     end if
+    if (join_wall_lo) then                           ! (the join, ghost mode: a face wall for the evolving side)
+      W(0, :, :) = -W(1, :, :);  W(-1, :, :) = -W(2, :, :)
+    end if
+    if (join_wall_hi) then
+      W(m+1, :, :) = -W(m, :, :);  W(m+2, :, :) = -W(m-1, :, :)
+    end if
     if (at_top .and. wall_top /= 'outflow') then
       if (wall_top == 'face') then
         W(m+1, :, :) = -W(m, :, :);  W(m+2, :, :) = -W(m-1, :, :)
@@ -1724,14 +1784,15 @@ contains
     integer, intent(in) :: iBlocks(:)
     real(dp), intent(in) :: t, dt
     integer :: stage, jb, ib, i, j, k, v
-    real(dp) :: cdt
+    real(dp) :: cdt, wdamp, fdamp
     real(dp), parameter :: c_stage(4) = [0.0_dp, 0.25_dp, 1.0_dp/3.0_dp, 0.5_dp]
     call local_steps(dt)
     dt_now = dt
-    if (freeze_cz) then
+    if (freeze_side /= 'none') then
       do jb = 1, size(iBlocks)
         ib = iBlocks(jb)
         if (frz_have(ib)) cycle
+        if (.not. block_frozen(ib)) cycle
         if (freeze_cz_mode == 'line_tied') then       ! a static CZ: v = 0 in its cells, from now on
           call cz_bind(ib)
           do i = 1, min(nb(1), k_join - r_off)
@@ -1754,8 +1815,10 @@ contains
     end if
     do stage = 1, 4
       call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + c_stage(stage)*dt)
+      call join_bc()
       do jb = 1, size(iBlocks)
         ib = iBlocks(jb)
+        if (skip_frozen(ib)) cycle                    ! (the frozen side: not computed, restored below)
         call cz_bind(ib)
         want_work = budget_on .and. stage == 1
         call rhs(ib)
@@ -1794,6 +1857,7 @@ contains
     end if
     if (use_atmosphere) then
       do jb = 1, size(iBlocks)
+        if (skip_frozen(iBlocks(jb))) cycle
         call cz_bind(iBlocks(jb))
         call atm_floors(iBlocks(jb))
       end do
@@ -1803,7 +1867,9 @@ contains
     if (use_atmosphere) then
       ! conduction (the ghosts in every direction), losses, heating, then the floors
       call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + dt)
+      call join_bc()
       do jb = 1, size(iBlocks)
+        if (skip_frozen(iBlocks(jb))) cycle
         call cz_bind(iBlocks(jb))
         call atm_block(iBlocks(jb), dt, at_bottom, at_top, shell_steps())
         call atm_floors(iBlocks(jb))
@@ -1812,15 +1878,17 @@ contains
     end if
     if (use_diffusion) then
       call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + dt)
+      call join_bc()
       do jb = 1, size(iBlocks)
+        if (skip_frozen(iBlocks(jb))) cycle
         call cz_bind(iBlocks(jb))
         call diffusion(iBlocks(jb), dt)
         if (use_atmosphere) call atm_floors(iBlocks(jb))
       end do
       call cz_unbind()
     end if
-    ! freeze_cz: the CZ cells back to their stored state
-    if (freeze_cz) then
+    ! freeze_cz (modes line_tied, all): the CZ cells back to their stored state
+    if (freeze_side == 'cz' .and. freeze_cz_mode /= 'ghost') then
       do jb = 1, size(iBlocks)
         call cz_bind(iBlocks(jb))
         do i = 1, min(nb(1), k_join - r_off)
@@ -1846,12 +1914,16 @@ contains
       if (cdt > 0.0_dp) then
         cdt = 1.0_dp - cdt/(v_damp_n + 1.0_dp)
         do jb = 1, size(iBlocks)
+          if (skip_frozen(iBlocks(jb))) cycle
           call cz_bind(iBlocks(jb))
-          do i = max(1, k_join - r_off + 1), nb(1)
-            ! (v_r towards the init file's profile: the wind keeps flowing)
+          do i = 1, nb(1)
+            wdamp = damp_weight(z_c(i))
+            if (wdamp <= 0.0_dp) cycle
+            fdamp = 1.0_dp - wdamp*(1.0_dp - cdt)     ! (cdt: the full factor, 1 - w(t)/(v_damp_n + 1))
+            ! (v_r towards the init file's profile: the wind keeps flowing; 0 in the CZ)
             State_GVB(i, 1:nb(2), 1:nb(3), vr_, iBlocks(jb)) = v_init(i) &
-                + cdt*(State_GVB(i, 1:nb(2), 1:nb(3), vr_, iBlocks(jb)) - v_init(i))
-            State_GVB(i, 1:nb(2), 1:nb(3), vt_:vp_, iBlocks(jb)) = cdt*State_GVB(i, 1:nb(2), 1:nb(3), vt_:vp_, iBlocks(jb))
+                + fdamp*(State_GVB(i, 1:nb(2), 1:nb(3), vr_, iBlocks(jb)) - v_init(i))
+            State_GVB(i, 1:nb(2), 1:nb(3), vt_:vp_, iBlocks(jb)) = fdamp*State_GVB(i, 1:nb(2), 1:nb(3), vt_:vp_, iBlocks(jb))
           end do
         end do
         call cz_unbind()
@@ -1878,6 +1950,13 @@ contains
       end do
       call cz_unbind()
     end if
+    ! ghost mode: the frozen side's blocks exactly as stored
+    if (freeze_side /= 'none' .and. freeze_cz_mode == 'ghost') then
+      do jb = 1, size(iBlocks)
+        ib = iBlocks(jb)
+        if (block_frozen(ib)) State_GVB(1:nb(1), 1:nb(2), 1:nb(3), 1:nv, ib) = frz_B(:, :, :, :, ib)
+      end do
+    end if
     dt_last = dt
     if (UseMultirate) then
       tloc = max(tloc, t + dt)                          ! (every level ends at the level-1 step's end)
@@ -1885,6 +1964,24 @@ contains
       tloc = tloc + tsc_g*dt
     end if
   contains
+    ! the friction's weight at height z [cm] (see v_damp_below_km)
+    real(dp) function damp_weight(z) result(w)
+      real(dp), intent(in) :: z
+      real(dp) :: zb, za, tw
+      zb = -v_damp_below_km*1.0e5_dp
+      za = v_damp_above_km*1.0e5_dp
+      tw = max(v_damp_taper_km, 1.0e-6_dp)*1.0e5_dp
+      w = 1.0_dp
+      if (z < 0.0_dp .or. (z <= 0.0_dp .and. v_damp_below_km <= 0.0_dp)) then
+        if (v_damp_below_km <= 0.0_dp) then
+          w = 0.0_dp
+        else if (z < zb) then
+          w = cos(0.5_dp*pi*min(1.0_dp, (zb - z)/tw))**2
+        end if
+      else if (v_damp_above_km >= 0.0_dp .and. z > za) then
+        w = cos(0.5_dp*pi*min(1.0_dp, (z - za)/tw))**2
+      end if
+    end function damp_weight
     subroutine zero_odd_b(i, bc)
       integer, intent(in) :: i
       character(*), intent(in) :: bc
@@ -2667,6 +2764,7 @@ contains
       else
         call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true.)
       end if
+      call join_bc()
     end if
     do jb = 1, size(iBlocks)
       ib = iBlocks(jb)

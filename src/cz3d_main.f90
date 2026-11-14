@@ -142,9 +142,14 @@ program cz3d_run
         ', losses ', use_losses, ', heating ', use_heating, '; switch at z = ', z_atm_km, ' km, width ', w_atm_km, &
         ' km; H_peak ', H_peak, ', z_heat ', z_heat_km, ' km; CZ frozen ', freeze_cz
     call arbor_print(msg)
-    if (freeze_cz) then
-      write(msg, '(A,A,A,I0,A)') '  frozen CZ: ', trim(freeze_cz_mode), ' (', freeze_float_cells, &
-          ' top cells with B_theta, B_phi and psi free in line_tied mode)'
+    if (freeze_side /= 'none') then
+      write(msg, '(A,A,A,A,A)') '  frozen side: ', trim(freeze_side), ' (join boundary: ', trim(freeze_cz_mode), &
+          '; the frozen blocks are not computed in ghost mode)'
+      call arbor_print(msg)
+    end if
+    if (v_damp_n > 0.0_dp) then
+      write(msg, '(A,F7.1,A,I0,A,I0,A,F9.1,A,F9.1,A)') '  friction: v_damp_n ', v_damp_n, ', ', v_damp_steps, ' steps + ramp ', &
+          v_damp_ramp, ', from ', v_damp_below_km, ' km below the join to ', v_damp_above_km, ' km above (< 0: all)'
       call arbor_print(msg)
     end if
   end if
@@ -177,6 +182,7 @@ program cz3d_run
         uniform_dir=merge(1, 0, mr_by_shell))
     call cz_setup()
   end if
+  if (UseMultirate) call print_radial_levels()
 
   if (plot_blocks) then
     ! (each block drawn as 1 x 4 x 4 bricks so the curved blocks bend)
@@ -263,6 +269,26 @@ program cz3d_run
   call arbor_finalize()
 
 contains
+
+  ! the multirate level of every radial block (min/max over its leaves), and
+  ! its step in units of the finest level's step (2^(nLevel - level))
+  subroutine print_radial_levels()
+    integer :: nrb, l, ir, lmin, lmax
+    character(len=200) :: msg
+    nrb = n_r/nb_r
+    call arbor_print('  multirate levels by radial block (level: 1 = the coarsest; step in finest-level steps):')
+    do ir = 0, nrb - 1
+      lmin = huge(1);  lmax = -1
+      do l = 1, size(iLevel_L)
+        if (tree%key(KI+1, l) /= ir) cycle
+        lmin = min(lmin, iLevel_L(l));  lmax = max(lmax, iLevel_L(l))
+      end do
+      write(msg, '(A,I3,A,I4,A,I4,A,I3,A,I3,A,I5,A,I5)') '    radial block ', ir, ' (cells ', ir*nb_r + 1, '-', (ir + 1)*nb_r, &
+          '): level ', lmin, '..', lmax, ', step x', 2**(nLevel - lmax), '..x', 2**(nLevel - lmin)
+      call arbor_print(msg)
+    end do
+  end subroutine print_radial_levels
+
 
   ! The background and the RSST factor per radial cell, out_dir/background.dat
   ! (for scripts/estimate_steps.py)

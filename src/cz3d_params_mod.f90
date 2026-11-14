@@ -246,6 +246,12 @@ module cz3d_params_mod
   ! linearly to 0 over v_damp_ramp steps; v_damp_n = 0: off
   real(dp) :: v_damp_n = 0.0_dp
   integer :: v_damp_steps = 0, v_damp_ramp = 0
+  ! where the friction acts: from v_damp_below_km below the join (0: not in the
+  ! CZ) to v_damp_above_km above it (< 0: the whole atmosphere), the weight
+  ! falling as cos^2 over v_damp_taper_km beyond each end (below only if
+  ! v_damp_below_km > 0, above only if v_damp_above_km >= 0); towards 0 for
+  ! v_h and towards the init file's v_r (the wind; 0 in the CZ)
+  real(dp) :: v_damp_below_km = 0.0_dp, v_damp_above_km = -1.0_dp, v_damp_taper_km = 500.0_dp
   logical :: pfss_check = .false.
   ! dpf_check (a test, with b_seed = 'pfss'): B = -grad Phi of the PFSS potential
   ! with the code's own stencils, its curl against the analytic PFSS field's
@@ -380,26 +386,35 @@ module cz3d_params_mod
   character(len=256) :: coronal_file = 'data/atomic/RadCoolCorona_8.0.dat'   ! (from FALCON/TR)
   ! the CZ cells 1..k_join held at their starting state after every step (CZTR step 2)
   logical  :: freeze_cz = .false.
-  ! how the frozen CZ acts as the atmosphere's lower boundary (freeze_cz):
-  ! 'line_tied' (the default): a static photosphere. v = 0 in every CZ cell
-  ! (set when the frozen state is stored, and restored after each step);
-  ! rho1, s1 and B_r restored; in the top freeze_float_cells CZ cells (those
-  ! the atmosphere's stencils read) B_theta, B_phi and psi evolve freely. The
-  ! boundary then imposes only what the incoming characteristics allow (v and
-  ! B_r fixed, the horizontal field and the divergence wave free, as SWMF's
-  ! inner boundary): no driving (a frozen v x B sheared the field above at
-  ! ~1 G/s), no pinned B_h (mhd5's top cell holds B_h = 0), no reflected
-  ! divergence errors. With v = 0 there, B_r stays fixed by the induction
-  ! anyway. 'all': every variable of every CZ cell restored (the state as
-  ! stored, v included: the runs before 2026-11-13).
-  character(len=12) :: freeze_cz_mode = 'line_tied'
+  ! freeze_side: which side of the join is held at its starting state while
+  ! the other relaxes: 'none', 'cz' (the atmosphere relaxes over a frozen CZ;
+  ! freeze_cz = .true. is the same) or 'atmosphere' (the CZ relaxes under a
+  ! frozen atmosphere). The frozen side's blocks are not computed (they still
+  ! enter the multirate level assignment through their stable dt) and are
+  ! restored after every step; the join is a block face.
+  ! freeze_cz_mode (the boundary at the join): 'ghost' (the default): the
+  ! evolving side's radial ghost cells at the join, after every ghost fill:
+  ! v odd (v = 0 at the join face: line tied, no driving, no mass flux; the
+  ! radial mass flux r^2 rho v_r odd as at a face wall), B_theta, B_phi and psi
+  ! even (free), B_r, rho1 and s1 the frozen side's values for 'cz' (the
+  ! photosphere below; B_r fixed and continuous), B_r the frozen atmosphere's
+  ! and rho1 (relative to rho0), s1 even for 'atmosphere' (a wall for the CZ,
+  ! as CZ_3D's top). The frozen side's own cells are never changed: the CZ keeps
+  ! its convective velocities. This imposes only what the incoming
+  ! characteristics allow (v at the join; B_r continuous), as SWMF's inner
+  ! boundary. Older modes (freeze_side = 'cz' only): 'line_tied' (v = 0 in the
+  ! CZ cells themselves, B_h and psi free in its top freeze_float_cells cells;
+  ! runs/real1875_dpf.nml 2026-11-13), 'all' (every variable of the CZ restored,
+  ! v included: the runs before 2026-11-13).
+  character(len=12) :: freeze_side = 'none'
+  character(len=12) :: freeze_cz_mode = 'ghost'
   integer  :: freeze_float_cells = 2
   ! diff_top_km above the photosphere: the full-diffusion weight falls from 1
   ! at z = 0 to 0 at z = diff_top_above_km (cos^2), so it stays a band at the
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -431,7 +446,15 @@ contains
     if (glm_ch /= 'fast' .and. glm_ch /= 'cfl') call arbor_abort('glm_ch must be fast or cfl')
     if (b_seed /= 'none' .and. b_seed /= 'toroidal' .and. b_seed /= 'dipole' .and. b_seed /= 'pfss' &
         .and. b_seed /= 'dpf') call arbor_abort('b_seed must be none, toroidal, dipole, pfss or dpf')
-    if (freeze_cz_mode /= 'line_tied' .and. freeze_cz_mode /= 'all') call arbor_abort('freeze_cz_mode must be line_tied or all')
+    if (freeze_cz .and. freeze_side == 'none') freeze_side = 'cz'
+    if (freeze_side /= 'none' .and. freeze_side /= 'cz' .and. freeze_side /= 'atmosphere') &
+        call arbor_abort('freeze_side must be none, cz or atmosphere')
+    if (freeze_side /= 'none' .and. .not. use_atmosphere) call arbor_abort('freeze_side needs use_atmosphere (a join)')
+    freeze_cz = freeze_side /= 'none'
+    if (freeze_cz_mode /= 'ghost' .and. freeze_cz_mode /= 'line_tied' .and. freeze_cz_mode /= 'all') &
+        call arbor_abort('freeze_cz_mode must be ghost, line_tied or all')
+    if (freeze_side == 'atmosphere' .and. freeze_cz_mode /= 'ghost') &
+        call arbor_abort('freeze_side = atmosphere needs freeze_cz_mode = ghost')
     if (freeze_float_cells < 0) call arbor_abort('freeze_float_cells must be >= 0')
     if (ghost_limiter /= 'minmod' .and. ghost_limiter /= 'mc' .and. ghost_limiter /= 'none') &
         call arbor_abort('ghost_limiter must be minmod, mc or none')
