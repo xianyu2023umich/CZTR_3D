@@ -1,4 +1,9 @@
 ! The atmosphere phase at 0.47 deg on Stampede3 (2026-11-15), with every fix
+! Third try (2026-11-15): the second (H_B_sat_G = 50) failed after 2176 steps: cold
+! pockets (temperature floor) at 4-7 Mm above the strongest cluster, from
+! growing temperature dips; now the conduction's relaxation time includes the
+! saturation factor (cond_tau_fsat, default; Rempel 2017 eq. 16 with f_sat), box
+! every 50 steps, 4 deg.
 ! Second try (2026-11-15): the first ran 4906 steps (1 h 43 min), then NaN at
 ! z = 208 km, lat -0.2, lon 63.5: 3.5 deg from the strongest flux cluster on
 ! the Sun (2.2 kG at lat -1.6, lon 59.8); the 1.875 deg crash sat on the
@@ -54,6 +59,6 @@
   t_end = 1.0e9, n_step_max = 10000, dt_max = 1.0e4
   n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 30.0
   dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
-  box_lat_deg = -1.0, box_lon_deg = 62.0, box_radius_deg = 6.0, box_z_km = -500.0, 10000.0, box_every = 200
+  box_lat_deg = -1.0, box_lon_deg = 61.0, box_radius_deg = 4.0, box_z_km = -500.0, 10000.0, box_every = 50
   wall_time_margin = 900.0
 /

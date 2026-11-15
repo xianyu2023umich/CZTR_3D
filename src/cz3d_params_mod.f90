@@ -390,6 +390,14 @@ module cz3d_params_mod
   ! et al. 2014): q = f_S q_Spitzer + (1 - f_S) (3/2) alpha_cl p_e v_r (radial
   ! faces), f_S = 1/(1 + (r/cond_r_rsun)^2); cond_r_rsun = 0: Spitzer only
   real(dp) :: cond_r_rsun = 0.0_dp, alpha_cl = 1.05_dp
+  ! the hyperbolic conduction's relaxation time with the saturation factor
+  ! f_sat = 1/(1 + |F_Spitzer|/(1.5 rho c_s^3)) (Rempel 2017 eq. 16 with f_sat; he
+  ! left it out as conservative but later found no artifacts with it): in hot,
+  ! thin gas the flux saturates, tau drops and the flux follows its target
+  ! instead of lagging and overshooting (CZTR_3D 0.47 deg: temperature dips
+  ! above kG clusters collapsing to the floor); .false.: the unsaturated
+  ! diffusivity, as solar_model and CZTR_3D before 2026-11-15
+  logical  :: cond_tau_fsat = .true.
   logical  :: use_conduction = .true., use_losses = .true., use_heating = .true.
   real(dp) :: z_atm_km = 0.0_dp, w_atm_km = 3.0_dp
   real(dp) :: H_peak = 1.0e-3_dp, z_heat_km = 1000.0_dp
@@ -433,7 +441,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &

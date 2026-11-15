@@ -371,6 +371,9 @@ contains
       qt = -Fc/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
       qt = fS*qt + (1.0_dp - fS)*Sf*qcl
       D = fS*k0*Tf**2.5_dp/(rf*cvf)
+      ! (cond_tau_fsat: the saturation factor also in tau, Rempel 2017 eq. 16 with
+      ! f_sat: lower tau where the flux saturates, the flux follows its target)
+      if (cond_tau_fsat) D = D/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
       budget = max(f_cfl_cond*dx/dt - vf, 1.0e-3_dp*dx/dt)
       tau = max(D/budget**2, 4.0_dp*dt)
       q = qt + (q - qt)*exp(-dt/tau)
