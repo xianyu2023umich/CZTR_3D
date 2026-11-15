@@ -1,0 +1,47 @@
+! The CZ phase of the 1.875 deg relaxation chain (2026-11-14): the CZ relaxes
+! under the frozen atmosphere of runs/real1875_dpf.nml, at the steps it will
+! have in the coupled run.
+! - restart_from: the LAST restart of output/real1875_dpf (edit XXXXXXXX).
+! - import_cz_on_restart: the CZ blocks from the mhd5 export (the CZ was frozen
+!   during the atmosphere phase, so this is its state then; it also restores
+!   the convection that the older freeze_cz_mode = 'line_tied' zeroed).
+! - freeze_side = 'atmosphere': the atmosphere's blocks are restored and not
+!   computed; at the join the CZ sees a wall (v = 0 at the face, no mass flux),
+!   B_r of the frozen atmosphere (fixed, continuous) and B_h, psi free.
+! - Multirate (dt1 = 0): the levels are set at this start with the frozen
+!   atmosphere included, so each CZ shell gets its coupled step (1.875 deg
+!   test: CZ top 0.39 s = 4 x the TR's 0.098 s; the table is printed at the
+!   start). The release reuses these levels (mr_relevel = .false.).
+! - 600 level-1 steps of ~12.5 s = ~2 h of model time, ~25 s each on 8 ranks
+!   (~4 h); profiles every 20 steps (~4 min), a restart every 600 s.
+! Watch: the near-surface profiles (T, rho, rms v at z = -2..0 Mm) levelling off.
+!   mpirun -np 8 ./cztr3d.x runs/chain1875_cz.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  restart_from = 'output/real1875_dpf/restart_XXXXXXXX.rst'
+  restart_new_output = .true.
+  import_dir = '../CZ_3D/output_stampede3/export_mhd5_1875', import_cz_on_restart = .true.
+  out_dir = 'output/chain1875_cz'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 0, nb_r = 28
+  use_atmosphere = .true., freeze_side = 'atmosphere'
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'dpf', pfss_lmax = 96, b_seed_rss_rsun = 2.5
+  b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  va_dt_target = 0.3, va_floor_cs = 1.5
+  cond_along_b = .true., b_iso_G = 1.0e-3
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11
+  dt1 = 0.0, mr_levels = 8, mr_by_shell = .true.
+  t_end = 1.0e9, n_step_max = 600, dt_max = 1.0e4
+  n_log = 20, dt_prof = 0.0, prof_every = 20, plot_dt = 0.0, restart_dt = 600.0
+  plot_at_end = .true.
+/

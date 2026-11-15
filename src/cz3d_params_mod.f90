@@ -406,6 +406,12 @@ module cz3d_params_mod
   ! CZ cells themselves, B_h and psi free in its top freeze_float_cells cells;
   ! runs/real1875_dpf.nml 2026-11-13), 'all' (every variable of the CZ restored,
   ! v included: the runs before 2026-11-13).
+  ! import_cz_on_restart (with restart_from and import_dir): after reading the
+  ! restart, the CZ blocks (below the join) are overwritten from the export in
+  ! import_dir, all variables (e.g. mhd5's convection back under an
+  ! atmosphere relaxed with freeze_cz_mode = 'line_tied', which zeroed the
+  ! CZ's velocities)
+  logical :: import_cz_on_restart = .false.
   character(len=12) :: freeze_side = 'none'
   character(len=12) :: freeze_cz_mode = 'ghost'
   integer  :: freeze_float_cells = 2
@@ -414,7 +420,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -446,6 +452,8 @@ contains
     if (glm_ch /= 'fast' .and. glm_ch /= 'cfl') call arbor_abort('glm_ch must be fast or cfl')
     if (b_seed /= 'none' .and. b_seed /= 'toroidal' .and. b_seed /= 'dipole' .and. b_seed /= 'pfss' &
         .and. b_seed /= 'dpf') call arbor_abort('b_seed must be none, toroidal, dipole, pfss or dpf')
+    if (import_cz_on_restart .and. (len_trim(restart_from) == 0 .or. len_trim(import_dir) == 0 .or. .not. use_atmosphere)) &
+        call arbor_abort('import_cz_on_restart needs restart_from, import_dir and use_atmosphere')
     if (freeze_cz .and. freeze_side == 'none') freeze_side = 'cz'
     if (freeze_side /= 'none' .and. freeze_side /= 'cz' .and. freeze_side /= 'atmosphere') &
         call arbor_abort('freeze_side must be none, cz or atmosphere')

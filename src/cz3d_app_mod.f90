@@ -159,7 +159,7 @@ module cz3d_app_mod
   integer, parameter :: nAcc = 18
   real(dp), allocatable :: bgf_r(:)
 
-  public :: cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
+  public :: cz_import_cz, cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
 
 contains
 
@@ -1543,6 +1543,22 @@ contains
     i0 = Key_IB(KI+1, iBlock)*nb(1) - imp_key(KI+1, m)*imp_nb(1)
     State_GVB(1:nb(1), 1:nb(2), 1:nb(3), 1:min(nv, imp_nv), iBlock) = buf(i0+1:i0+nb(1), :, :, 1:min(nv, imp_nv))
   end subroutine import_block
+
+  ! import_cz_on_restart: the CZ blocks (below the join) from the export
+  subroutine cz_import_cz()
+    integer :: jb, ib, n
+    character(len=200) :: msg
+    n = 0
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      if (Key_IB(KI+1, ib)*nb(1) + nb(1) > k_join) cycle
+      call import_block(ib)
+      n = n + 1
+    end do
+    n = arbor_sum(n)
+    write(msg, '(A,I0,A,A)') '  import_cz_on_restart: ', n, ' CZ blocks from ', trim(import_dir)
+    call arbor_print(msg)
+  end subroutine cz_import_cz
 
   ! The time, step and restart numbers of the export (state_export_meta.bin),
   ! if there: t and iStep set, the profile counter and the shell clocks

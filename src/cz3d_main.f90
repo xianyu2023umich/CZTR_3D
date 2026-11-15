@@ -91,6 +91,7 @@ program cz3d_run
     call arbor_ghost_build(tree, dom, bc=wall_bc, bounded=.true.)   ! no negative Yin-Yang ghosts (ARBOR 831b389)
     call cz_setup()
     if (n_var_file < cz_n_var()) call cz_field_from_hydro()
+    if (import_cz_on_restart) call cz_import_cz()
     if (tloc(1) < 0.0_dp) tloc = t                        ! (no shell clocks in the file: all at the run's time)
     restarted = .not. restart_new_output
     if (restart_new_output) then
