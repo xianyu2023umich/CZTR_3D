@@ -43,7 +43,8 @@ module cztr3d_atm_mod
   ! k_join - 2, 1 above) and the background force dp0/dr + rho0 g
   real(dp), allocatable, public :: S_bgf(:), bgforce(:)
   ! relaxing conductive fluxes (faces in r, theta, phi) and the last losses per block slot
-  real(dp), allocatable :: qr_B(:,:,:,:), qt_B(:,:,:,:), qp_B(:,:,:,:), Qloss_B(:,:,:,:)
+  real(dp), allocatable :: qr_B(:,:,:,:), qt_B(:,:,:,:), qp_B(:,:,:,:)
+  real(dp), allocatable, public :: Qloss_B(:,:,:,:), Qheat_B(:,:,:,:)   ! the last step's losses and heating [erg/cm3/s] (box output)
   ! one-block scratch: cells 0:nb(1)+1, 0:nb(2)+1, 0:nb(3)+1 (the faces' ghost cross only)
   real(dp), allocatable :: rho_A(:,:,:), T_A(:,:,:), cv_A(:,:,:), cs_A(:,:,:), ne_A(:,:,:), p_A(:,:,:)
   real(dp), allocatable :: F1(:,:,:,:), F2(:,:,:,:), F3(:,:,:,:), Dv(:,:,:,:)
@@ -79,10 +80,10 @@ contains
 
   ! After the blocks are (re)built: the per-block arrays (fluxes from 0) and scratch
   subroutine atm_setup()
-    if (allocated(qr_B)) deallocate(qr_B, qt_B, qp_B, Qloss_B)
+    if (allocated(qr_B)) deallocate(qr_B, qt_B, qp_B, Qloss_B, Qheat_B)
     allocate(qr_B(0:nb(1), nb(2), nb(3), nBlockMax), qt_B(nb(1), 0:nb(2), nb(3), nBlockMax), &
-        qp_B(nb(1), nb(2), 0:nb(3), nBlockMax), Qloss_B(nb(1), nb(2), nb(3), nBlockMax))
-    qr_B = 0.0_dp;  qt_B = 0.0_dp;  qp_B = 0.0_dp;  Qloss_B = 0.0_dp
+        qp_B(nb(1), nb(2), 0:nb(3), nBlockMax), Qloss_B(nb(1), nb(2), nb(3), nBlockMax), Qheat_B(nb(1), nb(2), nb(3), nBlockMax))
+    qr_B = 0.0_dp;  qt_B = 0.0_dp;  qp_B = 0.0_dp;  Qloss_B = 0.0_dp;  Qheat_B = 0.0_dp
     if (allocated(rho_A)) return
     allocate(rho_A(0:nb(1)+1, 0:nb(2)+1, 0:nb(3)+1))
     allocate(T_A, cv_A, cs_A, ne_A, p_A, mold=rho_A)
@@ -314,11 +315,12 @@ contains
               Qheat = Sc*H_peak*x*exp(1.0_dp - x)
               if (H_c > 0.0_dp) Qheat = Qheat + Sc*H_c*exp(-max(z_c(i), 0.0_dp)/(lambda_c_km*1.0e5_dp))
               if (H_ext > 0.0_dp) Qheat = Qheat + Sc*H_ext*exp(-max(z_c(i), 0.0_dp)/(lambda_ext_rsun*Rsun_atm))
-              if (H_B > 0.0_dp .and. use_B) Qheat = Qheat + Sc*H_B*norm2(State_GVB(i, j, k, BR:BP, ib)) &
+              if (H_B > 0.0_dp .and. use_B) Qheat = Qheat + Sc*H_B*bsat(norm2(State_GVB(i, j, k, BR:BP, ib))) &
                   *exp(-max(z_c(i), 0.0_dp)/(lambda_B_km*1.0e5_dp))/(1.0_dp + (ne_A(i, j, k)/n_gate)**4)
             end if
           end if
           Qloss_B(i, j, k, ib) = Qlos
+          Qheat_B(i, j, k, ib) = Qheat
           State_GVB(i, j, k, S1, ib) = State_GVB(i, j, k, S1, ib) + dt_in*stf(i)*(Qheat - Qlos)/(rho_A(i, j, k)*T_A(i, j, k))
         end do
       end do
@@ -326,6 +328,13 @@ contains
     end associate
 
   contains
+
+    ! |B| for the field-strength heating, saturated at H_B_sat_G (> 0)
+    real(dp) function bsat(b)
+      real(dp), intent(in) :: b
+      bsat = b
+      if (H_B_sat_G > 0.0_dp) bsat = min(b, H_B_sat_G)
+    end function bsat
 
     ! The (r, theta, phi) gradient of T at interior cell (i, j, k) of the block
     ! (central differences; the ghost layers next to the interior are filled)

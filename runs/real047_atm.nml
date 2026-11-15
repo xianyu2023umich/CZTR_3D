@@ -1,4 +1,13 @@
 ! The atmosphere phase at 0.47 deg on Stampede3 (2026-11-15), with every fix
+! Second try (2026-11-15): the first ran 4906 steps (1 h 43 min), then NaN at
+! z = 208 km, lat -0.2, lon 63.5: 3.5 deg from the strongest flux cluster on
+! the Sun (2.2 kG at lat -1.6, lon 59.8); the 1.875 deg crash sat on the
+! second strongest. Now the field-strength heating saturated at 50 G
+! (H_B_sat_G) and a box output around both (6 deg, z = -0.5..10 Mm, every 200
+! steps: out_dir/box_rNNNN.dat, ~10 MB per output). For a 2 h job:
+!   sbatch -N 4 --ntasks-per-node 112 -t 02:00:00 tools/job.stampede3_spr4 runs/real047_atm.nml
+! (the job's limit stops it with a restart; ~1.26 s per step: ~5000 steps)
+!
 ! from the 1.875 deg work: CZ_3D's mhd5 state (day 65.3) imported natively
 ! (no coarsening: its Yin-Yang boundary consistency kept), the discrete
 ! potential field (b_seed = 'dpf', compact; the PFSS at l = pi/dtheta = 384 as
@@ -40,10 +49,11 @@
   b_bc_bottom = 'conductor', b_bc_top = 'radial'
   va_dt_target = 0.3, va_floor_cs = 1.5
   cond_along_b = .true., b_iso_G = 1.0e-3
-  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11, H_B_sat_G = 50.0
   dt1 = 1.0e4
   t_end = 1.0e9, n_step_max = 10000, dt_max = 1.0e4
   n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 30.0
   dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
+  box_lat_deg = -1.0, box_lon_deg = 62.0, box_radius_deg = 6.0, box_z_km = -500.0, 10000.0, box_every = 200
   wall_time_margin = 900.0
 /

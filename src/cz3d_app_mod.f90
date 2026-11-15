@@ -3469,6 +3469,9 @@ contains
     integer, intent(in) :: iStep
     real(dp), intent(in) :: t
     if (probe_radius_deg > 0.0_dp) call probe_write(iStep, t)
+    if (box_radius_deg > 0.0_dp .and. box_every > 0) then
+      if (mod(iStep, box_every) == 0) call box_write(iStep, t)
+    end if
     call nan_check(iStep, t)
     if (lz_correct_steps > 0 .or. lz_correct_dt > 0.0_dp) then
       if (lz_correct_steps > 0) then
@@ -3485,6 +3488,62 @@ contains
     if (budget_on .and. (t >= t_next_bud - 1.0e-9_dp*dt_budget .or. t >= t_end*(1.0_dp - 1.0e-12_dp))) &
         call budget_write(iStep, t)
   end subroutine cz_after_step
+
+  ! Box output (box_radius_deg > 0; see cz3d_params_mod): the cells near a
+  ! point (e.g. where a run failed), full state, one file per rank
+  subroutine box_write(iStep, t)
+    use cztr3d_atm_mod, only: Qloss_B, Qheat_B
+    integer, intent(in) :: iStep
+    real(dp), intent(in) :: t
+    integer, save :: u = 0
+    real(dp) :: x0(3), x(3), e(3,3), la, lo, out(n_field), rho, cs, Tc, p, b(3), v(3), b2, qh, ql, zz
+    integer :: jb, ib, i, j, k
+    character(len=300) :: name
+    la = box_lat_deg*pi/180.0_dp;  lo = box_lon_deg*pi/180.0_dp
+    x0 = [cos(la)*cos(lo), cos(la)*sin(lo), sin(la)]
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      if (z_c(nb(1)) < box_z_km(1)*1.0e5_dp .or. z_c(1) > box_z_km(2)*1.0e5_dp) cycle
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          e = sph_basis(Metric_DB(2, ib)%X_I(j), Metric_DB(3, ib)%X_I(k))
+          x = e(:, 1)
+          if (Key_IB(KP, ib) == 2) x = yy_cart(x)
+          if (dot_product(x, x0) < cos(box_radius_deg*pi/180.0_dp)) cycle
+          if (u == 0) then
+            write(name, '(A,A,I4.4,A)') trim(out_dir), '/box_r', my_rank, '.dat'
+            open(newunit=u, file=trim(name), status='replace', action='write')
+            write(u, '(A)') '# step t[s] cell z[km] lat lon patch rho[g/cm3] T[K] vx vy vz[cm/s] Bx By Bz[G] (global Cartesian) ' // &
+                'beta Mach Q_heat Q_loss[erg/cm3/s]'
+          end if
+          do i = 1, nb(1)
+            zz = z_c(i)/1.0e5_dp
+            if (zz < box_z_km(1) .or. zz > box_z_km(2)) cycle
+            rho = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            call eos_eval(tab, rho, s0(i) + State_GVB(i, j, k, s1_, ib), out)
+            Tc = exp(out(F_LNT));  p = exp(out(F_LNP));  cs = sqrt(out(F_GAMMA1)*p/rho)
+            v = matmul(e, State_GVB(i, j, k, vr_:vp_, ib))
+            b = 0.0_dp
+            if (use_B) b = matmul(e, State_GVB(i, j, k, br_:bp_, ib))
+            if (Key_IB(KP, ib) == 2) then
+              v = yy_cart(v);  b = yy_cart(b)
+            end if
+            b2 = sum(b**2)
+            qh = 0.0_dp;  ql = 0.0_dp
+            if (allocated(Qheat_B) .and. r_off + i > k_join) then
+              qh = Qheat_B(i, j, k, ib);  ql = Qloss_B(i, j, k, ib)
+            end if
+            write(u, '(I9,ES15.7,I5,F11.1,2F9.3,I2,14ES12.4)') iStep, t, r_off + i, zz, &
+                asin(max(-1.0_dp, min(1.0_dp, x(3))))*180.0_dp/pi, atan2(x(2), x(1))*180.0_dp/pi, Key_IB(KP, ib), &
+                rho, Tc, v, b, p/max(b2/(8.0_dp*pi), tiny(1.0_dp)), norm2(v)/cs, qh, ql
+          end do
+        end do
+      end do
+    end do
+    call cz_unbind()
+    if (u /= 0) flush(u)
+  end subroutine box_write
 
   ! Debugging probe (probe_radius_deg > 0): the top probe_cells cells of the
   ! columns near (probe_lat_deg, probe_lon_deg), every step, one file per rank:

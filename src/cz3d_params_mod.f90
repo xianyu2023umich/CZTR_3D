@@ -58,6 +58,13 @@ module cz3d_params_mod
   ! column within probe_radius_deg (> 0) of (probe_lat_deg, probe_lon_deg) to
   ! out_dir/probe_rNNNN.dat
   real(dp) :: probe_lat_deg = 0.0_dp, probe_lon_deg = 0.0_dp, probe_radius_deg = 0.0_dp
+  ! box output (box_radius_deg > 0): every box_every steps, every cell within
+  ! box_radius_deg of (box_lat_deg, box_lon_deg) and with height z in
+  ! [box_z_km(1), box_z_km(2)] above the photosphere, one file per rank
+  ! (out_dir/box_rNNNN.dat): step t cell z lat lon patch rho T vx vy vz Bx By Bz
+  ! (global Cartesian, as the plot files) beta Mach Q_heat Q_loss
+  real(dp) :: box_lat_deg = 0.0_dp, box_lon_deg = 0.0_dp, box_radius_deg = 0.0_dp, box_z_km(2) = [-2000.0_dp, 20000.0_dp]
+  integer :: box_every = 100
   integer :: probe_cells = 4
   integer :: yy_margin = -1               ! Yin-Yang margin cells per side (< 0: ARBOR's default, ng + 1)
 
@@ -363,6 +370,12 @@ module cz3d_params_mod
   ! 1/(1 + (n_e/n_gate)^4) [erg cm^-3 s^-1, H_B per G] (the gate keeps it out of
   ! the dense chromosphere; Downs 2016 inject at n_e = 2e11 cm^-3); 0 = off
   real(dp) :: H_B = 0.0_dp, lambda_B_km = 4.0e4_dp, n_gate = 2.0e11_dp
+  ! H_B_sat_G > 0: the heating takes min(|B|, H_B_sat_G) instead of |B|. Downs'
+  ! H_B was calibrated on magnetograms smoothed to a few Mm; resolved kG
+  ! concentrations (mhd5 at 0.47 deg: up to 2.2 kG in single cells) heated their
+  ! columns beyond active-region levels and both real-field crashes sat at the
+  ! strongest clusters. 50 G caps a column near 1e7 erg/cm2/s; 0 = no cap
+  real(dp) :: H_B_sat_G = 0.0_dp
   ! conduction along the field (with use_B): the flux -kappa [w (b.grad T) b + (1 - w) grad T],
   ! w = B^2/(B^2 + b_iso_G^2) (isotropic where there is no field); the tangential
   ! gradient at a face from its cells' central differences
@@ -420,7 +433,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
