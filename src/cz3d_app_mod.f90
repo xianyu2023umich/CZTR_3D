@@ -85,6 +85,7 @@ module cz3d_app_mod
   real(dp), allocatable, public :: tloc(:)
   real(dp), pointer :: rate_r(:) => null(), rate_r_g(:) => null()
   integer :: n_adv = 0                            ! steps advanced in this run (the dt1 ramp)
+  real(dp) :: t_damp0 = -1.0_dp                   ! the run's start time (the friction schedule in model time)
   real(dp), public :: dt1_now = 0.0_dp            ! the current dt1 (with the ramp)
 
   ! one-block scratch
@@ -1920,7 +1921,16 @@ contains
     end if
     ! friction on v above the join (v_damp_n > 0), for the run's first steps (n_adv: local_steps)
     if (v_damp_n > 0.0_dp .and. use_atmosphere) then
-      if (n_adv <= v_damp_steps) then
+      if (t_damp0 < 0.0_dp) t_damp0 = t                ! (the run's start: the friction schedule's zero)
+      if (v_damp_time_s > 0.0_dp) then                 ! the schedule in model time
+        if (t + dt - t_damp0 <= v_damp_time_s) then
+          cdt = 1.0_dp
+        else if (t + dt - t_damp0 <= v_damp_time_s + v_damp_ramp_s) then
+          cdt = 1.0_dp - (t + dt - t_damp0 - v_damp_time_s)/max(v_damp_ramp_s, tiny(1.0_dp))
+        else
+          cdt = 0.0_dp
+        end if
+      else if (n_adv <= v_damp_steps) then
         cdt = 1.0_dp
       else if (n_adv <= v_damp_steps + v_damp_ramp) then
         cdt = 1.0_dp - real(n_adv - v_damp_steps, dp)/real(v_damp_ramp + 1, dp)
@@ -2013,13 +2023,15 @@ contains
   ! stable step of shell i (cfl over its largest rate on all ranks), then the
   ! smallest tsc within +-2 shells (a smooth step that stays stable). Uses
   ! and resets rate_r, filled by this step's stable_dt calls. dt1_ramp_steps
-  ! > 0: dt1 scaled by max(0, 1 - n/dt1_ramp_steps), n this run's steps.
+  ! > 0: dt1 scaled by max(0, 1 - (n - dt1_hold_steps)/dt1_ramp_steps), n this
+  ! run's steps (dt1 held for the first dt1_hold_steps).
   subroutine local_steps(dt)
     real(dp), intent(in) :: dt
     real(dp) :: a(1:n_r)
     integer :: i
     dt1_now = dt1
-    if (dt1_ramp_steps > 0) dt1_now = dt1*max(0.0_dp, 1.0_dp - real(n_adv, dp)/real(dt1_ramp_steps, dp))
+    if (dt1_ramp_steps > 0) dt1_now = dt1*min(1.0_dp, max(0.0_dp, &
+        1.0_dp - real(n_adv - dt1_hold_steps, dp)/real(dt1_ramp_steps, dp)))
     n_adv = n_adv + 1
     if (dt1_now <= 0.0_dp) then
       tsc_g = 1.0_dp

@@ -1,0 +1,51 @@
+! The release of the 1.875 deg relaxation chain (2026-11-15): CZ and
+! atmosphere computed together, from the end of runs/chain1875_cz.nml.
+! - restart_from: the LAST restart of output/chain1875_cz (edit XXXXXXXX).
+! - freeze_side = 'none': nothing frozen. mr_levels = 0 drops the restart's
+!   multirate levels: with multirate the step jumps by 2x across the join
+!   (CZ top 0.39 s, atmosphere 0.195 s) and the release step went NaN (laptop
+!   test); local time stepping changes the step smoothly from shell to shell.
+! - dt1 = 12.5 s (the multirate level-1 step): the deep CZ runs at most
+!   ~200x the top's step (laptop test: L at -52 Mm 1.48 -> 1.32 in 120
+!   steps, as the CZ phase's own relaxation; uncapped it fell to 0.78).
+!   Held for 4000 steps, then to 0 over 2000 steps: the run ends on the
+!   global step (time accurate). Back to multirate is a separate restart
+!   (mr_levels = 8, mr_relevel = .true.).
+! - Friction band +-2000 km around the join, in model time (the top's clock):
+!   full for 60 s, then to 0 over 120 s (~3000 steps at the top's ~0.06 s).
+! - ~1.7 s per step on 8 ranks (laptop): 6000 steps ~3 h. Profiles every
+!   250 steps, a restart every 30 s of model time (~500 steps).
+! Watch: L_top, max |v_h| (the corona's first transient: 2 -> 300 km/s in the
+! first 100 steps of the laptop test, settling), the near-surface profiles,
+! and that nothing happens when the friction and dt1 reach 0.
+!   mpirun -np 8 ./cztr3d.x runs/chain1875_release.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  restart_from = 'output/chain1875_cz/restart_XXXXXXXX.rst'
+  restart_new_output = .true., mr_relevel = .false.
+  out_dir = 'output/chain1875_release'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 0, nb_r = 28
+  use_atmosphere = .true., freeze_side = 'none'
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'dpf', pfss_lmax = 96, b_seed_rss_rsun = 2.5
+  b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  va_dt_target = 0.3, va_floor_cs = 1.5
+  cond_along_b = .true., b_iso_G = 1.0e-3
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11
+  dt1 = 12.5, dt1_hold_steps = 4000, dt1_ramp_steps = 2000, mr_levels = 0
+  v_damp_n = 30.0, v_damp_time_s = 60.0, v_damp_ramp_s = 120.0, v_damp_below_km = 2000.0, v_damp_above_km = 2000.0
+  t_end = 1.0e9, n_step_max = 6000, dt_max = 1.0e4
+  n_log = 20, dt_prof = 0.0, prof_every = 250, plot_dt = 0.0, restart_dt = 30.0
+  dump_shells = 197, 200, 215, 235, 244, 252, 280, 350
+  plot_at_end = .true.
+/

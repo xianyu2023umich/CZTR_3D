@@ -152,7 +152,17 @@ program cz3d_run
       write(msg, '(A,F7.1,A,I0,A,I0,A,F9.1,A,F9.1,A)') '  friction: v_damp_n ', v_damp_n, ', ', v_damp_steps, ' steps + ramp ', &
           v_damp_ramp, ', from ', v_damp_below_km, ' km below the join to ', v_damp_above_km, ' km above (< 0: all)'
       call arbor_print(msg)
+      if (v_damp_time_s > 0.0_dp) then
+        write(msg, '(A,F9.1,A,F9.1,A)') '  friction schedule in model time (replaces the steps): ', v_damp_time_s, &
+            ' s + ramp ', v_damp_ramp_s, ' s'
+        call arbor_print(msg)
+      end if
     end if
+  end if
+  if (dt1 > 0.0_dp .and. (dt1_hold_steps > 0 .or. dt1_ramp_steps > 0)) then
+    write(msg, '(A,ES10.3,A,I0,A,I0,A)') '  local time stepping: dt1 ', dt1, ' s held for ', dt1_hold_steps, &
+        ' steps, then to 0 over ', dt1_ramp_steps, ' steps'
+    call arbor_print(msg)
   end if
   write(msg, '(A,F9.1,A,F9.1,A,A,A,A,A,L1,A,F5.2)') '  r from ', (r_f(0) - r_top_cz)/1.0e5_dp, ' to ', &
       (r_f(n_r) - r_top_cz)/1.0e5_dp, ' km; walls: bottom ', trim(wall_bottom), ', top ', trim(wall_top), &
@@ -182,6 +192,12 @@ program cz3d_run
     call arbor_multirate_setup(app, tree, t, ratio=2, n_level_max=mr_levels, extrapolate_faster=mr_extrapolate, &
         uniform_dir=merge(1, 0, mr_by_shell))
     call cz_setup()
+  else if (mr_levels <= 1 .and. UseMultirate) then
+    ! a multirate restart run without multirate (e.g. local time stepping):
+    ! every block at one level
+    call arbor_multirate_setup(app, tree, t, ratio=2, n_level_max=1, uniform_dir=merge(1, 0, mr_by_shell))
+    call cz_setup()
+    call arbor_print('  multirate levels of the restart file dropped (mr_levels <= 1)')
   end if
   if (UseMultirate) call print_radial_levels()
 
