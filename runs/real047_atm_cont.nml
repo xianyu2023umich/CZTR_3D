@@ -1,0 +1,41 @@
+! Continuation of the 0.47 deg atmosphere phase on Stampede3 (2026-11-16),
+! from the third try's last restart (out_dir real047_atm_debug2: 7500 steps,
+! 201 s of model time at the top in 3 h, stopped by the wall limit, no NaN;
+! cond_tau_fsat fixed the cold-slab crash). Same physics; only the restart,
+! a new out_dir (new profile series), and the box every 100 steps.
+! At the stop: dt 0.020 s, max Mach 11.7 and max |v_r| 414 km/s, both still
+! rising over the last ~100 s (the place is not in the box: the job's stdout
+! ends with a "max Mach: r/R lat lon z" line); the hottest box cell ~8 MK.
+! Watch: max Mach / max |v_r| (log.txt columns 4, 5) levelling off, dt.
+! The restart lives on $SCRATCH (10-day purge). For an 8 h job (~20000 steps):
+!   sbatch -N 4 --ntasks-per-node 112 -t 08:00:00 tools/job.stampede3_spr4 runs/real047_atm_cont.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  restart_from = '/scratch/09595/xianyu2023/CZTR_3D_out/real047_atm_debug2/restart_00803876.rst'
+  restart_new_output = .true.
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/real047_atm_cont1'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .true., freeze_side = 'cz'
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'dpf', dpf_maxit = 5000, b_seed_rss_rsun = 2.5
+  b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  va_dt_target = 0.3, va_floor_cs = 1.5
+  cond_along_b = .true., b_iso_G = 1.0e-3
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11, H_B_sat_G = 50.0
+  dt1 = 1.0e4
+  t_end = 1.0e9, n_step_max = 30000, dt_max = 1.0e4
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 30.0
+  dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
+  box_lat_deg = -1.0, box_lon_deg = 61.0, box_radius_deg = 4.0, box_z_km = -500.0, 10000.0, box_every = 100
+  wall_time_margin = 900.0
+/
