@@ -1,0 +1,43 @@
+! Time series of the 0.47 deg atmosphere phase around the crash site
+! (2026-11-16): the third try (real047_atm_debug2) and its continuation
+! crashed at step 807779 (t = 287 s at the top) at lat -3.98, lon 68.20,
+! z 1.9 Mm: a field-aligned, transonic downflow of 4 MK gas into a strong-field
+! footpoint whose chromosphere had drained (40x below its neighbours, beta
+! ~1e-6, a kG horizontal field growing at the base). Siphon from a higher-
+! pressure footpoint? This run repeats the third try from the start (the
+! mhd5 import; deterministic, as the crashbox rerun showed) with a box of 15
+! deg radius around the site, z -0.5..150 Mm (loops up to ~90 Mm whose other
+! footpoint is within 15 deg), every 500 steps: ~23 snapshots of ~115 MB.
+! For field-line tracing along the loops through the site over time.
+! import_dir: the export_mhd5 path used for real047_atm_debug2 (check it).
+! ~1.3-1.4 s per step: the crash after ~11400 steps, ~4.5 h:
+!   sbatch -N 4 --ntasks-per-node 112 -t 05:00:00 tools/job.stampede3_spr4 runs/real047_atm_series.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  import_dir = '/scratch/09595/xianyu2023/CZ_3D/output/export_mhd5'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/real047_atm_series'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .true., freeze_side = 'cz'
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'dpf', dpf_maxit = 5000, b_seed_rss_rsun = 2.5
+  b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  va_dt_target = 0.3, va_floor_cs = 1.5
+  cond_along_b = .true., b_iso_G = 1.0e-3
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11, H_B_sat_G = 50.0
+  dt1 = 1.0e4
+  t_end = 1.0e9, n_step_max = 13000, dt_max = 1.0e4
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 30.0
+  dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
+  box_lat_deg = -3.5, box_lon_deg = 68.7, box_radius_deg = 15.0, box_z_km = -500.0, 150000.0, box_every = 500
+  wall_time_margin = 900.0
+/
