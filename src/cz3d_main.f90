@@ -92,6 +92,7 @@ program cz3d_run
     call cz_setup()
     if (n_var_file < cz_n_var()) call cz_field_from_hydro()
     if (import_cz_on_restart) call cz_import_cz()
+    if (use_atmosphere .and. atm_match_on_restart) call cz_match_base()
     if (tloc(1) < 0.0_dp) tloc = t                        ! (no shell clocks in the file: all at the run's time)
     restarted = .not. restart_new_output
     if (restart_new_output) then
@@ -118,6 +119,7 @@ program cz3d_run
     write(msg, '(A,A,A,I0,A,I0,A,L1)') '  imported from ', trim(import_dir), ': ', tree%n_leaf, ' blocks, step ', i_step, &
         ', time and clocks restored: ', have_rst
     call arbor_print(msg)
+    if (use_atmosphere .and. atm_match_base) call cz_match_base()
   else
     call arbor_tree_init(tree, dom, [0, 0, 0])
     call arbor_block_sync(tree)

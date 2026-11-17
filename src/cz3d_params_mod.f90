@@ -438,6 +438,19 @@ module cz3d_params_mod
   ! atmosphere relaxed with freeze_cz_mode = 'line_tied', which zeroed the
   ! CZ's velocities)
   logical :: import_cz_on_restart = .false.
+  ! atm_match_base (an import with the atmosphere, not a restart): each
+  ! column's lower atmosphere pressure-matched to its own CZ top. f = p(the
+  ! column's top CZ cell)/p(init_file's top CZ cell); init_file's atmosphere
+  ! density times f at its T, fully up to atm_match_z_km(1), not above
+  ! atm_match_z_km(2), a cos^2 step in between: in the chromosphere, where the
+  ! scale height is small (the step's force ~ f' H g); the TR, corona and wind
+  ! stay the common profile
+  logical :: atm_match_base = .true.
+  ! atm_match_on_restart: the same at a restart (e.g. the release after a CZ
+  ! relaxation under the frozen atmosphere, whose CZ top has moved on); it
+  ! overwrites the cells below atm_match_z_km(2) with the rescaled profile
+  logical :: atm_match_on_restart = .false.
+  real(dp) :: atm_match_z_km(2) = [300.0_dp, 1200.0_dp]
   character(len=12) :: freeze_side = 'none'
   character(len=12) :: freeze_cz_mode = 'ghost'
   integer  :: freeze_float_cells = 2
@@ -446,7 +459,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -489,6 +502,7 @@ contains
         call arbor_abort('freeze_cz_mode must be ghost, line_tied or all')
     if (freeze_side == 'atmosphere' .and. freeze_cz_mode /= 'ghost') &
         call arbor_abort('freeze_side = atmosphere needs freeze_cz_mode = ghost')
+    if (atm_match_z_km(2) <= atm_match_z_km(1)) call arbor_abort('atm_match_z_km(2) must exceed atm_match_z_km(1)')
     if (freeze_float_cells < 0) call arbor_abort('freeze_float_cells must be >= 0')
     if (ghost_limiter /= 'minmod' .and. ghost_limiter /= 'mc' .and. ghost_limiter /= 'none') &
         call arbor_abort('ghost_limiter must be minmod, mc or none')

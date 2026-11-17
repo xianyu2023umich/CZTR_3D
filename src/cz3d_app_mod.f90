@@ -28,7 +28,7 @@ module cz3d_app_mod
   use eos_types, only: eos_state
   use eos_thermo, only: eos_get_from_rho_T
   use const_mod, only: Lsun
-  use eos_table, only: eos_eval, eos_field, eos_field_n, eos_fields_n, n_field, F_LNP, F_LNT, F_GAMMA1, F_GAMMA3M1, F_LNCP, F_LNCV
+  use eos_table, only: eos_eval, eos_s_from_rho_T, eos_field, eos_field_n, eos_fields_n, n_field, F_LNP, F_LNT, F_GAMMA1, F_GAMMA3M1, F_LNCP, F_LNCV
   use eos_math, only: expm1
   use vmath_mod, only: vexp, vexpm1, vlog
   use mpi_f08, only: MPI_Allreduce, MPI_IN_PLACE, MPI_DOUBLE_PRECISION, MPI_MAX, MPI_COMM_WORLD
@@ -160,7 +160,7 @@ module cz3d_app_mod
   integer, parameter :: nAcc = 18
   real(dp), allocatable :: bgf_r(:)
 
-  public :: cz_import_cz, cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
+  public :: cz_import_cz, cz_match_base, cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
 
 contains
 
@@ -1560,6 +1560,81 @@ contains
     write(msg, '(A,I0,A,A)') '  import_cz_on_restart: ', n, ' CZ blocks from ', trim(import_dir)
     call arbor_print(msg)
   end subroutine cz_import_cz
+
+  ! atm_match_base: each column's lower atmosphere pressure-matched to its
+  ! own top CZ cell (see cz3d_params_mod; after an import, before the field
+  ! seed). f per column from the blocks holding cell k_join, gathered in a
+  ! (patch, theta, phi) map at the run's horizontal level; the atmosphere
+  ! cells below atm_match_z_km(2) then get init_file's density times
+  ! f_eff(z) at init_file's T (s from the EOS), v unchanged
+  subroutine cz_match_base()
+    real(dp), allocatable :: fm(:,:,:)
+    real(dp) :: out(n_field), lnp_ref, rho, rp, Tp, sp, rn, sn, zk, w, fe, fmin, fmax, qmin
+    integer :: nth, nph, jb, ib, i, j, k, jg, kg, ig, n
+    character(len=200) :: msg
+    nth = n_theta*2**refine_h
+    nph = n_phi*2**refine_h
+    allocate(fm(2, nth, nph))
+    fm = 0.0_dp
+    call cz_unbind()
+    call eos_eval(tab, rho0(k_join) + rho1_init(k_join), s0(k_join) + s1_init(k_join), out)
+    lnp_ref = out(F_LNP)
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      if (Key_IB(KL+2, ib) /= refine_h .or. Key_IB(KL+3, ib) /= refine_h) &
+          call arbor_abort('cz3d: atm_match_base needs every block at the horizontal level refine_h')
+      i = k_join - Key_IB(KI+1, ib)*nb(1)
+      if (i < 1 .or. i > nb(1)) cycle
+      call cz_bind(ib)
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          rho = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+          call eos_eval(tab, rho, s0(i) + State_GVB(i, j, k, s1_, ib), out)
+          fm(Key_IB(KP, ib), Key_IB(KI+2, ib)*nb(2) + j, Key_IB(KI+3, ib)*nb(3) + k) = exp(out(F_LNP) - lnp_ref)
+        end do
+      end do
+    end do
+    call cz_unbind()
+    call arbor_sum_inplace(fm)
+    fmin = minval(fm);  fmax = maxval(fm)
+    if (fmin <= 0.0_dp) call arbor_abort('cz3d: atm_match_base: a column without its top CZ cell')
+    qmin = huge(1.0_dp);  n = 0
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      do i = 1, nb(1)
+        ig = Key_IB(KI+1, ib)*nb(1) + i
+        zk = z_c(i)/1.0e5_dp
+        if (ig <= k_join .or. zk >= atm_match_z_km(2)) cycle
+        w = 1.0_dp
+        if (zk > atm_match_z_km(1)) w = cos(0.5_dp*pi*(zk - atm_match_z_km(1))/(atm_match_z_km(2) - atm_match_z_km(1)))**2
+        rp = rho0(i) + rho1_init(i)
+        sp = s0(i) + s1_init(i)
+        call eos_eval(tab, rp, sp, out)
+        Tp = exp(out(F_LNT))
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            jg = Key_IB(KI+2, ib)*nb(2) + j
+            kg = Key_IB(KI+3, ib)*nb(3) + k
+            fe = 1.0_dp + (fm(Key_IB(KP, ib), jg, kg) - 1.0_dp)*w
+            rn = fe*rp
+            sn = eos_s_from_rho_T(tab, rn, Tp, s_guess=sp)
+            State_GVB(i, j, k, rho1_, ib) = (rn - rho0(i))/rq(i)
+            State_GVB(i, j, k, s1_, ib) = sn - s0(i)
+            qmin = min(qmin, rn/rho0(i))
+            n = n + 1
+          end do
+        end do
+      end do
+    end do
+    call cz_unbind()
+    qmin = arbor_min(qmin);  n = arbor_sum(n)
+    write(msg, '(A,F7.4,A,F7.4,A,I0,A,F6.0,A,F6.0,A,F7.4)') '  atm_match_base: f = p(top CZ cell)/p(init_file) in ', fmin, &
+        ' .. ', fmax, '; ', n, ' atmosphere cells rescaled (full below ', atm_match_z_km(1), ' km, none above ', &
+        atm_match_z_km(2), ' km); min rho/rho0 there ', qmin
+    call arbor_print(msg)
+    if (qmin < 0.9_dp) call arbor_print('  atm_match_base: WARNING rho < 0.9 rho0 in the lower atmosphere (the background rule rho0 <= rho)')
+  end subroutine cz_match_base
 
   ! The time, step and restart numbers of the export (state_export_meta.bin),
   ! if there: t and iStep set, the profile counter and the shell clocks
@@ -3491,7 +3566,10 @@ contains
       end if
       if (lz_correct_dt > 0.0_dp .and. t >= t_next_lzc) call lz_correct(t)
     end if
-    if (mod(iStep, n_log) == 0 .or. t >= t_end*(1.0_dp - 1.0e-12_dp)) call cz_log(iStep, t)
+    if (mod(iStep, n_log) == 0 .or. t >= t_end*(1.0_dp - 1.0e-12_dp)) then
+      call cz_log(iStep, t)
+      if (use_atmosphere) call footpoint_report(iStep, t)
+    end if
     if (prof_every > 0) then
       if (mod(iStep, prof_every) == 0) call cz_profile(iStep, t)
     else if (dt_prof > 0.0_dp .and. t >= t_next_prof - 1.0e-9_dp*dt_prof) then
@@ -3500,6 +3578,89 @@ contains
     if (budget_on .and. (t >= t_next_bud - 1.0e-9_dp*dt_budget .or. t >= t_end*(1.0_dp - 1.0e-12_dp))) &
         call budget_write(iStep, t)
   end subroutine cz_after_step
+
+  ! Footpoint monitor (use_atmosphere, every log line): out_dir/footpoints.txt
+  ! with, over all columns, the lowest gas pressure in the shell nearest
+  ! z = 1 Mm relative to that shell's mean (a drained chromosphere), the
+  ! strongest downflow at z = 0.5-3 Mm (a siphon or drainage into a
+  ! footpoint) and the largest Mach number at z = 0-3 Mm, each with its place
+  ! (global latitude, longitude; z and T for the last two). The means count
+  ! the cells of both Yin-Yang patches (the overlap twice).
+  subroutine footpoint_report(iStep, t)
+    integer, intent(in) :: iStep
+    real(dp), intent(in) :: t
+    integer, save :: u = 0, i1 = 0
+    real(dp) :: out(n_field), rho, cs, p, zk, m, x(3), e(3,3), lat, lon, h
+    real(dp) :: psum, pn, pmin, vmin, mmax, gp, gv, gm
+    real(dp) :: lp(2), lv(4), lm(4)
+    integer :: jb, ib, i, j, k, ig
+    if (i1 == 0) i1 = minloc(abs(z_c(1:n_r) - 1.0e8_dp), 1)    ! (unbound views: the global shells)
+    psum = 0.0_dp;  pn = 0.0_dp;  pmin = huge(1.0_dp);  vmin = huge(1.0_dp);  mmax = -1.0_dp
+    lp = 0.0_dp;  lv = 0.0_dp;  lm = 0.0_dp
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      do i = 1, nb(1)
+        zk = z_c(i)/1.0e5_dp
+        ig = Key_IB(KI+1, ib)*nb(1) + i
+        if (ig /= i1 .and. (zk < 0.0_dp .or. zk > 3000.0_dp)) cycle
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            rho = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            call eos_eval(tab, rho, s0(i) + State_GVB(i, j, k, s1_, ib), out)
+            p = exp(out(F_LNP))
+            cs = sqrt(out(F_GAMMA1)*p/rho)
+            m = norm2(State_GVB(i, j, k, vr_:vp_, ib))/cs
+            e = sph_basis(Metric_DB(2, ib)%X_I(j), Metric_DB(3, ib)%X_I(k))
+            x = e(:, 1)
+            if (Key_IB(KP, ib) == 2) x = yy_cart(x)
+            lat = asin(max(-1.0_dp, min(1.0_dp, x(3))))*180.0_dp/pi
+            lon = atan2(x(2), x(1))*180.0_dp/pi
+            if (ig == i1) then
+              psum = psum + p;  pn = pn + 1.0_dp
+              if (p < pmin) then
+                pmin = p;  lp = [lat, lon]
+              end if
+            end if
+            if (zk >= 500.0_dp .and. zk <= 3000.0_dp .and. State_GVB(i, j, k, vr_, ib) < vmin) then
+              vmin = State_GVB(i, j, k, vr_, ib);  lv = [lat, lon, zk, exp(out(F_LNT))]
+            end if
+            if (zk >= 0.0_dp .and. m > mmax) then
+              mmax = m;  lm = [lat, lon, zk, exp(out(F_LNT))]
+            end if
+          end do
+        end do
+      end do
+    end do
+    call cz_unbind()
+    psum = arbor_sum(psum);  pn = arbor_sum(pn)
+    gp = arbor_min(pmin);  gv = arbor_min(vmin);  gm = arbor_max(mmax)
+    ! the places, from the rank(s) that hold each extreme
+    if (pmin /= gp) lp = 0.0_dp
+    if (vmin /= gv) lv = 0.0_dp
+    if (mmax /= gm) lm = 0.0_dp
+    h = arbor_sum(merge(1.0_dp, 0.0_dp, pmin == gp))
+    do i = 1, 2
+      lp(i) = arbor_sum(lp(i))/max(h, 1.0_dp)
+    end do
+    h = arbor_sum(merge(1.0_dp, 0.0_dp, vmin == gv))
+    do i = 1, 4
+      lv(i) = arbor_sum(lv(i))/max(h, 1.0_dp)
+    end do
+    h = arbor_sum(merge(1.0_dp, 0.0_dp, mmax == gm))
+    do i = 1, 4
+      lm(i) = arbor_sum(lm(i))/max(h, 1.0_dp)
+    end do
+    if (.not. is_root) return
+    if (u == 0) then
+      open(newunit=u, file=trim(out_dir)//'/footpoints.txt', status='unknown', position='append', action='write')
+      write(u, '(A,F8.1,A)') '# step  t[s]  p_min/<p> at z = ', z_c(i1)/1.0e5_dp, ' km, lat, lon | min v_r [km/s] at' // &
+          ' z = 0.5-3 Mm, lat, lon, z[km], T | max Mach at z = 0-3 Mm, lat, lon, z[km], T'
+    end if
+    write(u, '(I9,ES14.6,ES11.3,2F8.2,ES11.3,2F8.2,F9.1,ES10.2,ES11.3,2F8.2,F9.1,ES10.2)') iStep, t, &
+        gp/max(psum/max(pn, 1.0_dp), tiny(1.0_dp)), lp, gv/1.0e5_dp, lv, gm, lm
+    flush(u)
+  end subroutine footpoint_report
 
   ! Box output (box_radius_deg > 0; see cz3d_params_mod): the cells near a
   ! point (e.g. where a run failed), full state, one file per rank
