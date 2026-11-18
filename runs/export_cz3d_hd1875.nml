@@ -21,7 +21,7 @@
   use_B = .false.
   ds1_random = 0.0
   yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 0, nb_r = 0
-  dt1 = 0.0
+  dt1 = 0.0, qconv_face = .false.   ! (c196_m0's restarts have no face state)
   t_end = 1.0e12, n_step_max = 0, dt_max = 1.0e4
   n_log = 100, dt_prof = 0.0, prof_every = 0, plot_dt = 0.0, restart_dt = 0.0
   export_state = .true.
