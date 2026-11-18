@@ -5,7 +5,7 @@
 !   CZ top below 1.2 Mm (atm_match_base); no field;
 ! - the radial semi-implicit solve over whole columns (si_radial; the columns,
 !   not the blocks, distributed to ranks), a smooth radial wave cap 1
-!   (wave_cfl_max), dt_max 1.0 = the CZ's relaxation step;
+!   (wave_cfl_max), no dt cap (dt_max 20, as CZTR_2D);
 ! - TR broadening (trac_Tc 5e5, trac_Tlow 1.2e4), hyperbolic conduction with
 !   f_sat (cond_tau_fsat, default), the coronal heating H_c as CZTR_2D.
 ! 2 h of model time (~0.5-1 s steps, ~1 s wall per step on 8 ranks: ~3 h).
@@ -32,7 +32,7 @@
   use_B = .false.
   dt1 = 0.0, mr_levels = 0
   si_radial = .true., wave_cfl_max = 1.0, trac_Tc = 5.0e5, trac_Tlow = 1.2e4
-  t_end = 1.0e9, n_step_max = 10000, dt_max = 1.0
+  t_end = 1.0e9, n_step_max = 10000, dt_max = 20.0
   n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 1200.0
   dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
   plot_at_end = .true.
