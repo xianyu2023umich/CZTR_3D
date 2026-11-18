@@ -201,6 +201,11 @@ program cz3d_run
     call cz_setup()
     call arbor_print('  multirate levels of the restart file dropped (mr_levels <= 1)')
   end if
+  if (si_radial) then
+    ! the radial semi-implicit solve: whole columns per rank, then the per-block arrays again
+    call cz_columns_to_ranks(tree)
+    call cz_setup()
+  end if
   if (UseMultirate) call print_radial_levels()
 
   if (plot_blocks) then

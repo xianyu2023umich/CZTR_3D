@@ -1,0 +1,39 @@
+! Hydrodynamic chain at 1.875 deg (2026-11-18), step 2 of 2: the CZ of
+! runs/hd1875_czdt.nml (its export) with the atmosphere on top, everything
+! free from t = 0 (CZTR_2D's recipe, cpl_hd):
+! - the atmosphere: one profile (init file) pressure-matched per column to the
+!   CZ top below 1.2 Mm (atm_match_base); no field;
+! - the radial semi-implicit solve over whole columns (si_radial; the columns,
+!   not the blocks, distributed to ranks), a smooth radial wave cap 1
+!   (wave_cfl_max), dt_max 1.0 = the CZ's relaxation step;
+! - TR broadening (trac_Tc 5e5, trac_Tlow 1.2e4), hyperbolic conduction with
+!   f_sat (cond_tau_fsat, default), the coronal heating H_c as CZTR_2D.
+! 2 h of model time (~0.5-1 s steps, ~1 s wall per step on 8 ranks: ~3 h).
+! Laptop test (120 steps from the coarsened mhd5): dt 0.49 -> 0.74 s rising.
+! Watch: log.txt (dt, Mach), footpoints.txt, the TR heights (log), profiles.
+!   mpirun -np 8 ./cztr3d.x runs/hd1875_cpl.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  import_dir = 'output/hd1875_czdt'
+  out_dir = 'output/hd1875_cpl'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 0, nb_r = 28
+  use_atmosphere = .true., freeze_side = 'none', atm_match_base = .true.
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7, H_c = 3.0e-5, lambda_c_km = 4.0e4
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .false.
+  dt1 = 0.0, mr_levels = 0
+  si_radial = .true., wave_cfl_max = 1.0, trac_Tc = 5.0e5, trac_Tlow = 1.2e4
+  t_end = 1.0e9, n_step_max = 10000, dt_max = 1.0
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 1200.0
+  dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
+  plot_at_end = .true.
+/

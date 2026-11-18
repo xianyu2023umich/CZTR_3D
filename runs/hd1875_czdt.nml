@@ -1,0 +1,28 @@
+! Hydrodynamic chain at 1.875 deg (2026-11-18), step 1 of 2: the relaxed
+! hydrodynamic CZ alone (no atmosphere: n_r_cells = 0 -> the 196 CZ cells,
+! top boundary as CZ_3D) continued at the step the coupled run will take, so
+! the near-surface layer settles at that step (CZTR_2D: cz_dt11; relaxing at
+! another step kicks the coupling). 2 h of model time at dt = 1.0 s, then an
+! export for step 2 (runs/hd1875_cpl.nml).
+! import_dir: the relaxed hydrodynamic 1.875 deg CZ as a state export (if it
+! is a CZ_3D restart, export it first: a CZ_3D run from that restart with
+! n_step_max = 1, export_state = .true.).
+!   mpirun -np 8 ./cztr3d.x runs/hd1875_czdt.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 0
+  table_file = 'data/eos_table_wind.bin'
+  import_dir = 'XXXX'
+  out_dir = 'output/hd1875_czdt'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 0, nb_r = 28
+  use_atmosphere = .false., use_B = .false.
+  dt1 = 0.0, mr_levels = 0
+  t_end = 1.0e9, n_step_max = 7200, dt_max = 1.0
+  n_log = 100, dt_prof = 0.0, prof_every = 600, plot_dt = 0.0, restart_dt = 1800.0
+  export_state = .true.
+/

@@ -88,6 +88,16 @@ module cz3d_app_mod
   real(dp) :: t_damp0 = -1.0_dp                   ! the run's start time (the friction schedule in model time)
   real(dp), public :: dt1_now = 0.0_dp            ! the current dt1 (with the ramp)
 
+  ! si_radial (see cz3d_params_mod): S per cell, the stored RK tendencies of
+  ! the blocks in the implicit range, the diffusion's v_r before/change; the
+  ! range: global cells si_i0..si_i1 (radial blocks si_kb0..si_kb1); the local
+  ! columns: si_cb(q, c) the local block of column c's q-th radial block in
+  ! the range
+  real(dp), allocatable :: siS_B(:,:,:,:), siR_B(:,:,:,:,:), siV_B(:,:,:,:), siX_B(:,:,:,:)
+  integer :: si_i0 = 0, si_i1 = 0, si_kb0 = 0, si_kb1 = -1, si_ncol = 0
+  logical :: si_cols = .false.                   ! the columns distributed (cz_columns_to_ranks)
+  integer, allocatable :: si_cb(:,:)
+
   ! one-block scratch
   real(dp), allocatable :: rho_G(:,:,:), p1_G(:,:,:), cs_G(:,:,:), W_G(:,:,:), D_C(:,:,:), R_CV(:,:,:,:)
   real(dp), allocatable :: Dr_C(:,:,:), F1_FV(:,:,:,:), F2_FV(:,:,:,:), F3_FV(:,:,:,:), Div_CV(:,:,:,:)
@@ -160,7 +170,7 @@ module cz3d_app_mod
   integer, parameter :: nAcc = 18
   real(dp), allocatable :: bgf_r(:)
 
-  public :: cz_import_cz, cz_match_base, cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
+  public :: cz_columns_to_ranks, cz_import_cz, cz_match_base, cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
 
 contains
 
@@ -356,6 +366,7 @@ contains
       allocate(tloc(1:n_r))
       tloc = 0.0_dp
     end if
+    if (si_radial .and. si_cols) call si_setup()     ! (after cz_columns_to_ranks)
     if (allocated(rho_G)) return
     allocate(tsc_g(1:n_r), rate_r_g(1:n_r))
     tsc => tsc_g
@@ -1835,16 +1846,211 @@ contains
     end do
   end subroutine derived
 
+  ! ================================================================ radial semi-implicit
+
+  ! si_radial: the columns (patch, theta block, phi block) to ranks, each
+  ! column's radial blocks on one rank (the column solves need no messages).
+  ! The columns in the order their first blocks appear on the tree's Hilbert
+  ! curve, cut into n_ranks contiguous stretches; the blocks move with their
+  ! data (arbor_redistribute). All blocks at one horizontal level.
+  subroutine cz_columns_to_ranks(tree)
+    type(arbor_tree_t), intent(in) :: tree
+    integer, allocatable :: cid(:), pos(:), own(:), lev(:), per(:)
+    integer :: j, nth_b, nph_b, ncol, n
+    character(len=200) :: msg
+    if (any(tree%key(KL+2, :) /= tree%key(KL+2, 1)) .or. any(tree%key(KL+3, :) /= tree%key(KL+2, 1))) &
+        call arbor_abort('cz3d: si_radial needs every block at one horizontal level')
+    nth_b = maxval(tree%key(KI+2, :)) + 1
+    nph_b = maxval(tree%key(KI+3, :)) + 1
+    ncol = maxval(tree%key(KP, :))*nth_b*nph_b
+    allocate(cid(tree%n_leaf), pos(0:ncol-1), own(tree%n_leaf), lev(tree%n_leaf), per(0:n_ranks-1))
+    pos = -1
+    n = 0
+    do j = 1, tree%n_leaf
+      cid(j) = ((tree%key(KP, j) - 1)*nth_b + tree%key(KI+2, j))*nph_b + tree%key(KI+3, j)
+      if (pos(cid(j)) < 0) then
+        pos(cid(j)) = n
+        n = n + 1
+      end if
+    end do
+    per = 0
+    do j = 0, ncol - 1
+      if (pos(j) >= 0) per(int((int(pos(j), 8)*n_ranks)/n)) = per(int((int(pos(j), 8)*n_ranks)/n)) + 1
+    end do
+    do j = 1, tree%n_leaf
+      own(j) = int((int(pos(cid(j)), 8)*n_ranks)/n)
+    end do
+    lev = 1
+    call arbor_redistribute(tree, own, lev)
+    call arbor_ghost_rebuild(tree)
+    si_cols = .true.
+    write(msg, '(A,I0,A,I0,A,I0,A,I0,A)') '  si_radial: ', n, ' columns to ', n_ranks, ' ranks (', minval(per), &
+        ' .. ', maxval(per), ' per rank)'
+    call arbor_print(msg)
+  end subroutine cz_columns_to_ranks
+
+  logical function si_in(ib)
+    integer, intent(in) :: ib
+    si_in = si_radial .and. Key_IB(KI+1, ib) >= si_kb0 .and. Key_IB(KI+1, ib) <= si_kb1
+  end function si_in
+
+  ! The implicit range (whole radial blocks covering si_z_km), the local
+  ! columns and the per-block arrays (after every (re)distribution)
+  subroutine si_setup()
+    integer :: g0, g1, i, jb, ib, c, q, nk
+    character(len=200) :: msg
+    call cz_unbind()
+    g0 = 1;  g1 = n_r
+    do i = 1, n_r
+      if (z_c(i) >= si_z_km(1)*1.0e5_dp) then
+        g0 = i
+        exit
+      end if
+    end do
+    do i = n_r, 1, -1
+      if (z_c(i) <= si_z_km(2)*1.0e5_dp) then
+        g1 = i
+        exit
+      end if
+    end do
+    if (g1 < g0) call arbor_abort('cz3d: si_z_km holds no cell')
+    si_kb0 = (g0 - 1)/nb(1)
+    si_kb1 = (g1 - 1)/nb(1)
+    si_i0 = si_kb0*nb(1) + 1
+    si_i1 = (si_kb1 + 1)*nb(1)
+    nk = si_kb1 - si_kb0 + 1
+    if (allocated(si_cb)) deallocate(si_cb)
+    allocate(si_cb(nk, nBlock))
+    si_cb = 0
+    si_ncol = 0
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      if (.not. si_in(ib)) cycle
+      c = 0
+      do q = 1, si_ncol
+        ib_c: block
+          integer :: ib1
+          ib1 = maxval(si_cb(:, q))
+          if (all(Key_IB([KP, KI+2, KI+3], ib1) == Key_IB([KP, KI+2, KI+3], ib))) c = q
+        end block ib_c
+        if (c > 0) exit
+      end do
+      if (c == 0) then
+        si_ncol = si_ncol + 1
+        c = si_ncol
+      end if
+      si_cb(Key_IB(KI+1, ib) - si_kb0 + 1, c) = ib
+    end do
+    if (any(si_cb(:, 1:si_ncol) == 0)) &
+        call arbor_abort('cz3d: si_radial: a column is not whole on its rank (cz_columns_to_ranks not called?)')
+    if (allocated(siS_B)) deallocate(siS_B, siR_B)
+    allocate(siS_B(nb(1), nb(2), nb(3), nBlockMax), siR_B(nb(1), nb(2), nb(3), nv, nBlockMax))
+    siS_B = 0.0_dp
+    if (allocated(siV_B)) deallocate(siV_B, siX_B)
+    if (si_diff_precond) allocate(siV_B(nb(1), nb(2), nb(3), nBlockMax), siX_B(nb(1), nb(2), nb(3), nBlockMax))
+    write(msg, '(A,I0,A,I0,A,F9.1,A,F10.1,A)') '  si_radial: implicit cells ', si_i0, ' .. ', si_i1, ' (z ', &
+        z_c(si_i0)/1.0e5_dp, ' .. ', z_c(si_i1)/1.0e5_dp, ' km; the two cells at each end explicit)'
+    call arbor_print(msg)
+  end subroutine si_setup
+
+  ! S of block ib's cells in the implicit range for the step dt (0 elsewhere
+  ! and in the two cells at each end of the range):
+  ! S = max(0, c^2 dt^2/(si_cfl - C_f)^2 - dr^2/4), c the fast speed bound of
+  ! derived (c_s + v_A), C_f = |v_r| dt/dr (at most si_cfl/2 in the formula)
+  subroutine si_coeff(ib, dt)
+    integer, intent(in) :: ib
+    real(dp), intent(in) :: dt
+    integer :: i, j, k, g
+    real(dp) :: dr, cf
+    if (.not. si_cols) call arbor_abort('cz3d: si_radial: the columns were not distributed (cz_columns_to_ranks)')
+    siS_B(:, :, :, ib) = 0.0_dp
+    if (.not. si_in(ib)) return
+    call derived(ib, .true.)
+    do k = 1, nb(3)
+      do j = 1, nb(2)
+        do i = 1, nb(1)
+          g = r_off + i
+          if (g < si_i0 + 2 .or. g > si_i1 - 2) cycle
+          dr = drdxi_c(i)
+          cf = min(abs(State_GVB(i, j, k, vr_, ib))*dt/dr, 0.5_dp*si_cfl)
+          siS_B(i, j, k, ib) = max(0.0_dp, (cs_G(i, j, k)*dt/(si_cfl - cf))**2 - 0.25_dp*dr**2)
+        end do
+      end do
+    end do
+  end subroutine si_coeff
+
+  ! X <- x with (rho - (1/r^2) d/dr r^2 rho S d/dr) x = rho X along every
+  ! local column's range (conservative 3-point form on the cell widths; face
+  ! S and rho the means of the two cells; no flux through the range's end
+  ! faces). X(i, j, k, ib) on the blocks of the range; Thomas algorithm (the
+  ! rows are diagonally dominant)
+  subroutine si_column_solve(X)
+    real(dp), intent(inout) :: X(:, :, :, :)
+    integer :: c, q, i, j, k, m, nk, n, g, ib
+    real(dp), allocatable :: a(:), b(:), cc(:), d(:), wf(:), rp(:), sv(:)
+    real(dp) :: vol, w
+    nk = si_kb1 - si_kb0 + 1
+    m = nk*nb(1)
+    allocate(a(m), b(m), cc(m), d(m), wf(0:m), rp(m), sv(m))
+    call cz_unbind()                                   ! (the global radial arrays)
+    do c = 1, si_ncol
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          do q = 1, nk
+            ib = si_cb(q, c)
+            do i = 1, nb(1)
+              n = (q - 1)*nb(1) + i
+              g = si_i0 - 1 + n
+              rp(n) = rho0(g) + rq(g)*State_GVB(i, j, k, rho1_, ib)
+              sv(n) = siS_B(i, j, k, ib)
+              d(n) = X(i, j, k, ib)
+            end do
+          end do
+          if (maxval(sv) <= 0.0_dp) cycle
+          wf(0) = 0.0_dp;  wf(m) = 0.0_dp
+          do n = 1, m - 1
+            g = si_i0 - 1 + n
+            wf(n) = r_f(g)**2*0.25_dp*(rp(n) + rp(n+1))*(sv(n) + sv(n+1))/(r_c(g+1) - r_c(g))
+          end do
+          do n = 1, m
+            g = si_i0 - 1 + n
+            vol = r_c(g)**2*(r_f(g) - r_f(g-1))
+            a(n) = -wf(n-1)
+            cc(n) = -wf(n)
+            b(n) = vol*rp(n) + wf(n-1) + wf(n)
+            d(n) = vol*rp(n)*d(n)
+          end do
+          do n = 2, m
+            w = a(n)/b(n-1)
+            b(n) = b(n) - w*cc(n-1)
+            d(n) = d(n) - w*d(n-1)
+          end do
+          d(m) = d(m)/b(m)
+          do n = m - 1, 1, -1
+            d(n) = (d(n) - cc(n)*d(n+1))/b(n)
+          end do
+          do q = 1, nk
+            ib = si_cb(q, c)
+            do i = 1, nb(1)
+              X(i, j, k, ib) = d((q - 1)*nb(1) + i)
+            end do
+          end do
+        end do
+      end do
+    end do
+  end subroutine si_column_solve
+
   ! ================================================================ time step
 
   ! dt < cfl / sum_d (|v_d| + cs/xi)/l_d, l_r = CZTR's dr/dxi
   real(dp) function cz_stable_dt(self, iBlock) result(dt)
     class(cz3d_app_t), intent(inout) :: self
     integer, intent(in) :: iBlock
-    real(dp) :: cs, rate, rr, sth, rc, rp(nb(1)), s(nb(1)), q(nb(1), 2), e(nb(1))
+    real(dp) :: cs, cs0, crad, ratew, rate, rr, sth, rc, rp(nb(1)), s(nb(1)), q(nb(1), 2), e(nb(1))
     integer :: i, j, k
     call cz_bind(iBlock)
     rate = 0.0_dp
+    ratew = 0.0_dp
     do k = 1, nb(3)
       do j = 1, nb(2)
         sth = sin(Metric_DB(2, iBlock)%X_I(j))
@@ -1856,9 +2062,21 @@ contains
         call vexp(nb(1), q(:, 1), e)
         do i = 1, nb(1)
           cs = sqrt(q(i, 2)*e(i)/rp(i))/xi(i)
+          cs0 = cs
           if (use_B) cs = cs + va_eff(sum(State_GVB(i, j, k, br_:bp_, iBlock)**2), rp(i), cell_cap(i, j, k, iBlock, cs))
           rr = r_c(i)
-          rc = (abs(State_GVB(i, j, k, vr_, iBlock)) + cs)/drdxi_c(i) &
+          ! si_radial: in the implicit range (not its two end cells) the radial
+          ! wave speed leaves the CFL (with a field the radial Alfven speed stays);
+          ! wave_cfl_max: a looser radial wave CFL there
+          crad = cs
+          if (si_radial) then
+            if (r_off + i >= si_i0 + 2 .and. r_off + i <= si_i1 - 2) then
+              if (wave_cfl_max > 0.0_dp) ratew = max(ratew, cs/drdxi_c(i))
+              crad = 0.0_dp
+              if (use_B) crad = va_eff(State_GVB(i, j, k, br_, iBlock)**2, rp(i), cell_cap(i, j, k, iBlock, cs0))
+            end if
+          end if
+          rc = (abs(State_GVB(i, j, k, vr_, iBlock)) + crad)/drdxi_c(i) &
               + (abs(State_GVB(i, j, k, vt_, iBlock)) + cs)/(rr*Metric_DB(2, iBlock)%Dx_I(j)) &
               + (abs(State_GVB(i, j, k, vp_, iBlock)) + cs)/(rr*sth*Metric_DB(3, iBlock)%Dx_I(k))
           rate = max(rate, rc)
@@ -1867,6 +2085,7 @@ contains
       end do
     end do
     dt = min(cfl/rate, dt_max)
+    if (ratew > 0.0_dp) dt = min(dt, wave_cfl_max/ratew)
     if (use_atmosphere) dt = min(dt, atm_dt(iBlock, rate_r(1:nb(1))))
     call cz_unbind()
   end function cz_stable_dt
@@ -1913,12 +2132,15 @@ contains
         if (skip_frozen(ib)) cycle                    ! (the frozen side: not computed, restored below)
         call cz_bind(ib)
         want_work = budget_on .and. stage == 1
+        if (si_radial .and. stage == 1) call si_coeff(ib, dt)
         call rhs(ib)
         want_work = .false.
         ! the RK update, with each shell's step factor tsc (local time stepping):
         ! one pass in memory order (the same arithmetic as scaling R_CV first)
         cdt = dt/real(5 - stage, dp)
-        if (dt1_now > 0.0_dp) then
+        if (si_in(ib)) then
+          siR_B(:, :, :, 1:nv, ib) = R_CV          ! (updated after the column solves below)
+        else if (dt1_now > 0.0_dp) then
           do v = 1, nv
             do k = 1, nb(3)
               do j = 1, nb(2)
@@ -1941,6 +2163,25 @@ contains
         end if
       end do
       call cz_unbind()
+      ! si_radial: the v_r tendencies of the implicit range through the column
+      ! operator, then those blocks' RK update
+      if (si_radial) then
+        call si_column_solve(siR_B(:, :, :, vr_, :))
+        cdt = dt/real(5 - stage, dp)
+        do jb = 1, size(iBlocks)
+          ib = iBlocks(jb)
+          if (.not. si_in(ib)) cycle
+          do v = 1, nv
+            do k = 1, nb(3)
+              do j = 1, nb(2)
+                do i = 1, nb(1)
+                  State_GVB(i, j, k, v, ib) = StateOld_GVB(i, j, k, v, ib) + cdt*siR_B(i, j, k, v, ib)
+                end do
+              end do
+            end do
+          end do
+        end do
+      end if
     end do
     if (budget_on) then
       do jb = 1, size(iBlocks)
@@ -1971,6 +2212,11 @@ contains
     if (use_diffusion) then
       call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + dt)
       call join_bc()
+      if (si_radial .and. si_diff_precond) then             ! (v_r before the diffusion)
+        do jb = 1, size(iBlocks)
+          if (si_in(iBlocks(jb))) siV_B(:, :, :, iBlocks(jb)) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_, iBlocks(jb))
+        end do
+      end if
       do jb = 1, size(iBlocks)
         if (skip_frozen(iBlocks(jb))) cycle
         call cz_bind(iBlocks(jb))
@@ -1978,6 +2224,18 @@ contains
         if (use_atmosphere) call atm_floors(iBlocks(jb))
       end do
       call cz_unbind()
+      ! si_radial: the diffusion's v_r change through the same column operator
+      if (si_radial .and. si_diff_precond) then
+        do jb = 1, size(iBlocks)
+          ib = iBlocks(jb)
+          if (si_in(ib)) siX_B(:, :, :, ib) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_, ib) - siV_B(:, :, :, ib)
+        end do
+        call si_column_solve(siX_B)
+        do jb = 1, size(iBlocks)
+          ib = iBlocks(jb)
+          if (si_in(ib)) State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_, ib) = siV_B(:, :, :, ib) + siX_B(:, :, :, ib)
+        end do
+      end if
     end if
     ! freeze_cz (modes line_tied, all): the CZ cells back to their stored state
     if (freeze_side == 'cz' .and. freeze_cz_mode /= 'ghost') then
@@ -3143,6 +3401,20 @@ contains
           do i = 1 - di, nb(1)
             C(i, j, k) = 0.25_dp*(abs(State_GVB(i, j, k, vd, ib)) + cs_G(i, j, k) &
                 + abs(State_GVB(i+di, j+dj, k+dk, vd, ib)) + cs_G(i+di, j+dj, k+dk))
+          end do
+        end do
+      end do
+      ! si_radial: the radial face speed capped at si_diff_cap dr/dt where
+      ! either cell is implicit (the explicit diffusion stays stable)
+      if (si_radial .and. di == 1) then
+        do i = 0, nb(1)
+          if (r_off + i + 1 < si_i0 + 2 .or. r_off + i > si_i1 - 2) cycle
+          C(i, :, :) = min(C(i, :, :), si_diff_cap*(r_c(i+1) - r_c(i))/dt)
+        end do
+      end if
+      do k = 1 - dk, nb(3)
+        do j = 1 - dj, nb(2)
+          do i = 1 - di, nb(1)
             F(i, j, k, rho1_) = -C(i, j, k)*jump4(State_GVB(i-di, j-dj, k-dk, rho1_, ib), State_GVB(i, j, k, rho1_, ib), &
                 State_GVB(i+di, j+dj, k+dk, rho1_, ib), State_GVB(i+2*di, j+2*dj, k+2*dk, rho1_, ib))
           end do

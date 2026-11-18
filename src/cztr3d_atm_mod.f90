@@ -308,7 +308,8 @@ contains
               end if
               coron = 0.0_dp
               if (w < 1.0_dp - 1.0e-6_dp) coron = ne_A(i, j, k)*nHt*coronal_lambda(coronal_tab, lT)
-              Qlos = Sc*(w*chromo + (1.0_dp - w)*coron)
+              ! TR broadening: the whole loss times f (1 below trac_Tlow)
+              Qlos = Sc*(w*chromo + (1.0_dp - w)*coron)*trac_f(T_A(i, j, k))
             end if
             if (use_heating) then
               x = max(z_c(i), 0.0_dp)/(z_heat_km*1.0e5_dp)
@@ -366,7 +367,7 @@ contains
       real(dp), intent(in) :: Sf, Tf, rf, csf, cvf, Tg, dx, vf, fS, qcl
       real(dp), intent(inout) :: q
       real(dp) :: k0, Fc, qt, D, budget, tau
-      k0 = Sf*(kappa0_spitzer + blend_weight(Tf, T_SWITCH, T_SWITCH_WIDTH)*extra_h_kappa0(hcond_tab, log10(Tf)))
+      k0 = Sf*(kappa0_spitzer/trac_f(Tf) + blend_weight(Tf, T_SWITCH, T_SWITCH_WIDTH)*extra_h_kappa0(hcond_tab, log10(Tf)))
       Fc = k0*Tf**2.5_dp*Tg
       qt = -Fc/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
       qt = fS*qt + (1.0_dp - fS)*Sf*qcl
@@ -399,6 +400,17 @@ contains
       end do
     end do
   end subroutine atm_floors
+
+  ! The TR broadening factor f(T) <= 1 (trac_Tc, trac_Tlow; 1 when off)
+  pure real(dp) function trac_f(T) result(f)
+    real(dp), intent(in) :: T
+    real(dp) :: x, r
+    f = 1.0_dp
+    if (trac_Tc <= 0.0_dp .or. T >= trac_Tc .or. T <= trac_Tlow) return
+    x = min(1.0_dp, log(T/trac_Tlow)/log(1.5_dp))
+    r = x*x*(3.0_dp - 2.0_dp*x)
+    f = exp(2.5_dp*r*log(T/trac_Tc))
+  end function trac_f
 
   ! dt_rad_factor x the shortest loss time rho cv T/Q_loss of block ib (the
   ! last step's losses; huge if none); rate_r (optional): per radial cell,
