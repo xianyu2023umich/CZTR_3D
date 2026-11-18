@@ -11,7 +11,7 @@
 &cz3d
   grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 0
   table_file = 'data/eos_table_wind.bin'
-  import_dir = 'XXXX'
+  import_dir = '../CZ_3D/output/export_hd1875'
   out_dir = 'output/hd1875_czdt'
   top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
   use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0

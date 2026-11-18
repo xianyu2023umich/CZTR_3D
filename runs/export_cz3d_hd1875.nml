@@ -1,0 +1,28 @@
+! State export of the relaxed hydrodynamic 1.875 deg CZ_3D run (2026-11-18),
+! for CZTR_3D's hydrodynamic chain (runs/hd1875_czdt.nml: import_dir =
+! ../CZ_3D/output/export_hd1875). Zero steps: writes out_dir/state_export_rNNNN.bin
+! and state_export_meta.bin (the CZ cells 1..196 by block key). Run it with
+! CZ_3D's executable FROM THE CZ_3D DIRECTORY (paths are CZ_3D's):
+!   cd ../CZ_3D && mpirun -np 8 ./cz3d.x ../CZTR_3D/runs/export_cz3d_hd1875.nml
+! Edit: restart_from (the run's last restart). The other settings should be
+! those of that run (they only matter for reading it back; no step is taken).
+&cz3d
+  grid_file = 'data/grid_015a1.dat', init_file = 'data/static_init_015a1.dat'
+  restart_from = 'output/XXXX/restart_XXXXXXXX.rst'
+  restart_new_output = .true.
+  out_dir = 'output/export_hd1875'
+  r_top_rsun = 1.0
+  wall_top = 'cell'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0
+  use_B = .false.
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 0, nb_r = 28
+  dt1 = 0.0
+  t_end = 1.0e12, n_step_max = 0, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 0, plot_dt = 0.0, restart_dt = 0.0
+  export_state = .true.
+/
