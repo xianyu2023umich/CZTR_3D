@@ -1,0 +1,31 @@
+! State export of the hydrodynamic 0.47 deg CZ_3D run c196_m0_r2c10_s3
+! (2026-11-19), for CZTR_3D's 0.47 deg hydrodynamic chain (runs/hd047_czdt.nml).
+! Zero steps: writes out_dir/state_export_rNNNN.bin and state_export_meta.bin
+! (the CZ cells 1..196 by block key, ~1.7 GB). Settings as the s3 run (radial
+! blocks of 28 cells, refine_h = 2: 8064 blocks); its restarts hold the face
+! state. restart_from: s3's restart that seeded the MHD runs; use a later
+! one if s3 has one (ls output/c196_m0_r2c10_s3/restart_*). Run with
+! CZ_3D's executable FROM THE CZ_3D DIRECTORY on Stampede3 (~10 min):
+!   cd $SCRATCH/CZ_3D   (or wherever output/c196_m0_r2c10_s3 lives)
+!   sbatch -N 1 --ntasks-per-node 96 -t 00:30:00 tools/job.stampede3_spr4 ../CZTR_3D/runs/export_cz3d_hd047.nml
+&cz3d
+  grid_file = 'data/grid_015a1.dat', init_file = 'data/static_init_015a1.dat'
+  restart_from = 'output/c196_m0_r2c10_s3/restart_00633633.rst'
+  restart_new_output = .true.
+  out_dir = 'output/export_hd047'
+  r_top_rsun = 1.0
+  wall_top = 'cell'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0
+  use_B = .false.
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  dt1 = 10.0
+  t_end = 1.0e12, n_step_max = 0, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 0, plot_dt = 0.0, restart_dt = 0.0
+  wall_time_margin = 300.0
+  export_state = .true.
+/
