@@ -1,0 +1,36 @@
+! Pre-flight check for runs/hd047_cpl.nml (2026-11-19): the same settings and
+! layout (0.47 deg, 23040 blocks, 1152 columns on 384 ranks, si_radial, TRAC,
+! per-column matching), but from CZ_3D's mhd5 export (already on scratch)
+! with the field dropped, for 20 steps, no restarts. It checks the Intel
+! build of the new code (si_radial, the column distribution, TRAC,
+! cond_dB0_G), the run's memory, the import, the matching and the first
+! coupled steps. Independent of the export/czdt steps: submit it at the same
+! time. First, on the login node: git pull && make (in CZTR_3D).
+! Expect in the job output: "si_radial: 1152 columns to 384 ranks (3 .. 3 per
+! rank)", the matching's f range, then 20 log lines with dt ~0.2-1 s.
+!   sbatch -N 4 --ntasks-per-node 96 -t 00:40:00 tools/job.stampede3_spr4 runs/check047_cpl.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  import_dir = '/scratch/09595/xianyu2023/CZ_3D/output/export_mhd5'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/check047_cpl'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .true., freeze_side = 'none', atm_match_base = .true.
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7, H_c = 3.0e-5, lambda_c_km = 4.0e4
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .false.
+  dt1 = 0.0, mr_levels = 0
+  si_radial = .true., wave_cfl_max = 1.0, trac_Tc = 5.0e5, trac_Tlow = 1.2e4
+  t_end = 1.0e9, n_step_max = 20, dt_max = 20.0
+  n_log = 1, dt_prof = 0.0, prof_every = 10, plot_dt = 0.0, restart_dt = 0.0
+  dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
+  wall_time_margin = 300.0
+/
