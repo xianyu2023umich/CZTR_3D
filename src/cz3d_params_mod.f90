@@ -386,6 +386,12 @@ module cz3d_params_mod
   ! gradient at a face from its cells' central differences
   logical  :: cond_along_b = .false.
   real(dp) :: b_iso_G = 1.0e-3_dp
+  ! the unresolved vertical (network) field in the field-aligned conduction
+  ! (CZTR_2D): rms dB_r(z) = cond_dB0_G (1 - tanh((z - cond_dB_zj_km)/cond_dB_w_km))/2,
+  ! entering <b b> = (B B + dB_r^2 e_r e_r + b_iso^2 I)/(B^2 + dB_r^2 + b_iso^2)
+  ! (a vertical conduction that stays where the resolved field is horizontal,
+  ! below the magnetic junction z_j). 0 = off
+  real(dp) :: cond_dB0_G = 0.0_dp, cond_dB_zj_km = 4000.0_dp, cond_dB_w_km = 1500.0_dp
   ! more heating, S [H_c exp(-z/lambda_c) + H_ext exp(-z/lambda_ext)]
   ! [erg cm^-3 s^-1] (Downs et al. 2010: the quiet-Sun term H_c 7.28e-5 with
   ! lambda_c 40 Mm, the extended term H_ext 5e-7 with lambda_ext 0.7 R_sun,
@@ -471,6 +477,12 @@ module cz3d_params_mod
   ! blocks (default: the whole column)
   real(dp) :: si_z_km(2) = [-1.0e30_dp, 1.0e30_dp]
   logical :: si_diff_precond = .true.
+  ! si_alfven (with si_radial and a field): the same radial operator on
+  ! v_theta, v_phi with the radial Alfven speed |B_r|/sqrt(4 pi rho) (Boris
+  ! reduced); without it that speed stays in the radial CFL
+  logical :: si_alfven = .false.
+  ! wave_cfl_cs_only: the wave cap (wave_cfl_max) with c_s only (no Alfven speed)
+  logical :: wave_cfl_cs_only = .false.
   ! wave_cfl_max > 0 (with si_radial): dt also <= wave_cfl_max dr/c in the
   ! implicit range (a looser, smooth radial wave CFL; CZTR_2D: 1). 0 = off
   real(dp) :: wave_cfl_max = 0.0_dp
@@ -488,7 +500,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -532,6 +544,7 @@ contains
     if (freeze_side == 'atmosphere' .and. freeze_cz_mode /= 'ghost') &
         call arbor_abort('freeze_side = atmosphere needs freeze_cz_mode = ghost')
     if (si_radial .and. (dt1 > 0.0_dp .or. mr_levels > 1)) call arbor_abort('si_radial needs global steps (dt1 = 0, mr_levels <= 1)')
+    if (si_alfven .and. .not. (si_radial .and. use_B)) call arbor_abort('si_alfven needs si_radial and use_B')
     if (si_radial .and. freeze_side /= 'none') call arbor_abort('si_radial needs freeze_side = none')
     if (si_radial .and. si_z_km(2) <= si_z_km(1)) call arbor_abort('si_z_km(2) must exceed si_z_km(1)')
     if (atm_match_z_km(2) <= atm_match_z_km(1)) call arbor_abort('atm_match_z_km(2) must exceed atm_match_z_km(1)')

@@ -1,0 +1,44 @@
+! The field stage at 1.875 deg (2026-11-19), from the end of runs/hd1875_cpl.nml
+! (the hydrodynamic CZ + atmosphere): a first, simple field test.
+! - restart_from: the LAST restart of output/hd1875_cpl (edit XXXXXXXX). The
+!   file is hydrodynamic: B and psi start at zero and get the seed.
+! - The seed: CZ_3D's toroidal B_phi = 100 G sin(theta) below 0.95 R, to 0
+!   at 0.98 R (b_seed = 'toroidal'); no field above, none in the atmosphere.
+! - si_alfven: the radial semi-implicit operator also on v_theta, v_phi with
+!   the radial Alfven speed; the wave cap with c_s only (wave_cfl_cs_only), as
+!   CZTR_2D's hy_dip runs.
+! - Field-aligned conduction with the unresolved vertical field
+!   (cond_dB0_G = 10 G below the junction at 4 Mm, CZTR_2D): where the
+!   resolved field is horizontal (or 0) the conduction stays vertical there.
+! - The Alfven speed capped for a ~1 s step (va_dt_target 1.0, va_floor_cs 1.5).
+! - No field diffusion change (B diffused as before).
+! Laptop test (60 steps from a 120-step hydrodynamic test): dt 0.78 -> 0.97 s,
+! |B| 100 G, rms(div B dx)/|B| 1.6e-5; ~2.2x the hydrodynamic cost per step.
+!   mpirun -np 8 ./cztr3d.x runs/hd1875_mhd.nml
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  restart_from = 'output/hd1875_cpl/restart_XXXXXXXX.rst', restart_new_output = .true.
+  out_dir = 'output/hd1875_mhd'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 0, nb_r = 28
+  use_atmosphere = .true., freeze_side = 'none'
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7, H_c = 3.0e-5, lambda_c_km = 4.0e4
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'toroidal', b_seed_G = 100.0, b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  cond_along_b = .true., cond_dB0_G = 10.0, si_alfven = .true., wave_cfl_cs_only = .true.
+  va_dt_target = 1.0, va_floor_cs = 1.5
+  dt1 = 0.0, mr_levels = 0
+  si_radial = .true., wave_cfl_max = 1.0, trac_Tc = 5.0e5, trac_Tlow = 1.2e4
+  t_end = 1.0e9, n_step_max = 10000, dt_max = 20.0
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 1200.0
+  dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
+  plot_at_end = .true.
+/

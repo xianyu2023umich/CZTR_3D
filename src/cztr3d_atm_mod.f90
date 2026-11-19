@@ -178,7 +178,7 @@ contains
               if (i + 1 <= m) then;  gt = gt + grad_cell(i+1, j, k);  x = x + 1.0_dp;  end if
               gt = gt/max(x, 1.0_dp);  gt(1) = Tg
               bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i+1, j, k, BR:BP, ib))
-              Tg = along_b(gt, bf, 1)
+              Tg = along_b(gt, bf, 1, r_f(i) - r_top_cz)
             end if
             vf = 0.5_dp*abs(State_GVB(i, j, k, VR, ib) + State_GVB(i+1, j, k, VR, ib))
             fS = 1.0_dp;  qcl = 0.0_dp
@@ -213,7 +213,7 @@ contains
               if (j + 1 <= nb(2)) then;  gt = gt + grad_cell(i, j+1, k);  x = x + 1.0_dp;  end if
               gt = gt/max(x, 1.0_dp);  gt(2) = Tg
               bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i, j+1, k, BR:BP, ib))
-              Tg = along_b(gt, bf, 2)
+              Tg = along_b(gt, bf, 2, z_c(i))
             end if
             vf = 0.5_dp*abs(State_GVB(i, j, k, VT, ib) + State_GVB(i, j+1, k, VT, ib))
             fS = 1.0_dp
@@ -246,7 +246,7 @@ contains
               if (k + 1 <= nb(3)) then;  gt = gt + grad_cell(i, j, k+1);  x = x + 1.0_dp;  end if
               gt = gt/max(x, 1.0_dp);  gt(3) = Tg
               bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i, j, k+1, BR:BP, ib))
-              Tg = along_b(gt, bf, 3)
+              Tg = along_b(gt, bf, 3, z_c(i))
             end if
             vf = 0.5_dp*abs(State_GVB(i, j, k, VP, ib) + State_GVB(i, j, k+1, VP, ib))
             fS = 1.0_dp
@@ -349,16 +349,22 @@ contains
       end associate
     end function grad_cell
 
-    ! The gradient that drives the face flux along direction d: w b_d (b.g) +
-    ! (1 - w) g_d, b = B/|B|, w = B^2/(B^2 + b_iso_G^2) (cond_along_b)
-    real(dp) function along_b(g, bv, d) result(gd)
-      real(dp), intent(in) :: g(3), bv(3)
+    ! The gradient that drives the face flux along direction d at height zf
+    ! [cm] (cond_along_b): (<b b> g)_d with the unresolved vertical field of
+    ! rms dB_r(z) and the isotropic part b_iso_G,
+    !   <b b> = (B B + dB_r^2 e_r e_r + b_iso^2 I)/(B^2 + dB_r^2 + b_iso^2)
+    ! dB_r(z) = cond_dB0_G (1 - tanh((z - cond_dB_zj_km)/cond_dB_w_km))/2
+    ! (0 when cond_dB0_G = 0: then w b_d (b.g) + (1 - w) g_d, w = B^2/(B^2 + b_iso^2))
+    real(dp) function along_b(g, bv, d, zf) result(gd)
+      real(dp), intent(in) :: g(3), bv(3), zf
       integer, intent(in) :: d
-      real(dp) :: b2, w
-      b2 = sum(bv**2)
-      w = b2/(b2 + b_iso_G**2)
-      gd = (1.0_dp - w)*g(d)
-      if (b2 > 0.0_dp) gd = gd + w*bv(d)*dot_product(bv, g)/b2
+      real(dp) :: db2, dn
+      db2 = 0.0_dp
+      if (cond_dB0_G > 0.0_dp) &
+          db2 = (cond_dB0_G*0.5_dp*(1.0_dp - tanh((zf - cond_dB_zj_km*1.0e5_dp)/(cond_dB_w_km*1.0e5_dp))))**2
+      dn = sum(bv**2) + db2 + b_iso_G**2
+      gd = (bv(d)*dot_product(bv, g) + b_iso_G**2*g(d))/dn
+      if (d == 1) gd = gd + db2*g(1)/dn
     end function along_b
 
     ! CZTR's hyperbolic face flux: target -fsat k0 T^2.5 dT/dx, relaxed;

@@ -94,6 +94,7 @@ module cz3d_app_mod
   ! columns: si_cb(q, c) the local block of column c's q-th radial block in
   ! the range
   real(dp), allocatable :: siS_B(:,:,:,:), siR_B(:,:,:,:,:), siV_B(:,:,:,:), siX_B(:,:,:,:)
+  real(dp), allocatable :: siSa_B(:,:,:,:)   ! si_alfven: S of v_theta, v_phi (the radial Alfven speed)
   integer :: si_i0 = 0, si_i1 = 0, si_kb0 = 0, si_kb1 = -1, si_ncol = 0
   logical :: si_cols = .false.                   ! the columns distributed (cz_columns_to_ranks)
   integer, allocatable :: si_cb(:,:)
@@ -1946,6 +1947,11 @@ contains
     if (allocated(siS_B)) deallocate(siS_B, siR_B)
     allocate(siS_B(nb(1), nb(2), nb(3), nBlockMax), siR_B(nb(1), nb(2), nb(3), nv, nBlockMax))
     siS_B = 0.0_dp
+    if (allocated(siSa_B)) deallocate(siSa_B)
+    if (si_alfven) then
+      allocate(siSa_B(nb(1), nb(2), nb(3), nBlockMax))
+      siSa_B = 0.0_dp
+    end if
     if (allocated(siV_B)) deallocate(siV_B, siX_B)
     if (si_diff_precond) allocate(siV_B(nb(1), nb(2), nb(3), nBlockMax), siX_B(nb(1), nb(2), nb(3), nBlockMax))
     write(msg, '(A,I0,A,I0,A,F9.1,A,F10.1,A)') '  si_radial: implicit cells ', si_i0, ' .. ', si_i1, ' (z ', &
@@ -1956,14 +1962,16 @@ contains
   ! S of block ib's cells in the implicit range for the step dt (0 elsewhere
   ! and in the two cells at each end of the range):
   ! S = max(0, c^2 dt^2/(si_cfl - C_f)^2 - dr^2/4), c the fast speed bound of
-  ! derived (c_s + v_A), C_f = |v_r| dt/dr (at most si_cfl/2 in the formula)
+  ! derived (c_s + v_A), C_f = |v_r| dt/dr (at most si_cfl/2 in the formula);
+  ! si_alfven: siSa_B the same with c the radial Alfven speed (Boris reduced)
   subroutine si_coeff(ib, dt)
     integer, intent(in) :: ib
     real(dp), intent(in) :: dt
     integer :: i, j, k, g
-    real(dp) :: dr, cf
+    real(dp) :: dr, cf, rp
     if (.not. si_cols) call arbor_abort('cz3d: si_radial: the columns were not distributed (cz_columns_to_ranks)')
     siS_B(:, :, :, ib) = 0.0_dp
+    if (si_alfven) siSa_B(:, :, :, ib) = 0.0_dp
     if (.not. si_in(ib)) return
     call derived(ib, .true.)
     do k = 1, nb(3)
@@ -1974,6 +1982,11 @@ contains
           dr = drdxi_c(i)
           cf = min(abs(State_GVB(i, j, k, vr_, ib))*dt/dr, 0.5_dp*si_cfl)
           siS_B(i, j, k, ib) = max(0.0_dp, (cs_G(i, j, k)*dt/(si_cfl - cf))**2 - 0.25_dp*dr**2)
+          if (si_alfven) then
+            rp = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            siSa_B(i, j, k, ib) = max(0.0_dp, (va_eff(State_GVB(i, j, k, br_, ib)**2, rp, &
+                cell_cap(i, j, k, ib, cell_cs(i, j, k, rp)))*dt/(si_cfl - cf))**2 - 0.25_dp*dr**2)
+          end if
         end do
       end do
     end do
@@ -1982,10 +1995,11 @@ contains
   ! X <- x with (rho - (1/r^2) d/dr r^2 rho S d/dr) x = rho X along every
   ! local column's range (conservative 3-point form on the cell widths; face
   ! S and rho the means of the two cells; no flux through the range's end
-  ! faces). X(i, j, k, ib) on the blocks of the range; Thomas algorithm (the
-  ! rows are diagonally dominant)
-  subroutine si_column_solve(X)
+  ! faces). X(i, j, k, ib) on the blocks of the range, S = SS (siS_B, or
+  ! siSa_B for v_theta, v_phi); Thomas algorithm (the rows are diagonally dominant)
+  subroutine si_column_solve(X, SS)
     real(dp), intent(inout) :: X(:, :, :, :)
+    real(dp), intent(in) :: SS(:, :, :, :)
     integer :: c, q, i, j, k, m, nk, n, g, ib
     real(dp), allocatable :: a(:), b(:), cc(:), d(:), wf(:), rp(:), sv(:)
     real(dp) :: vol, w
@@ -2002,7 +2016,7 @@ contains
               n = (q - 1)*nb(1) + i
               g = si_i0 - 1 + n
               rp(n) = rho0(g) + rq(g)*State_GVB(i, j, k, rho1_, ib)
-              sv(n) = siS_B(i, j, k, ib)
+              sv(n) = SS(i, j, k, ib)
               d(n) = X(i, j, k, ib)
             end do
           end do
@@ -2066,14 +2080,16 @@ contains
           if (use_B) cs = cs + va_eff(sum(State_GVB(i, j, k, br_:bp_, iBlock)**2), rp(i), cell_cap(i, j, k, iBlock, cs))
           rr = r_c(i)
           ! si_radial: in the implicit range (not its two end cells) the radial
-          ! wave speed leaves the CFL (with a field the radial Alfven speed stays);
-          ! wave_cfl_max: a looser radial wave CFL there
+          ! wave speed leaves the CFL (with a field the radial Alfven speed stays,
+          ! unless si_alfven); wave_cfl_max: a looser radial wave CFL there
+          ! (wave_cfl_cs_only: with c_s alone)
           crad = cs
           if (si_radial) then
             if (r_off + i >= si_i0 + 2 .and. r_off + i <= si_i1 - 2) then
-              if (wave_cfl_max > 0.0_dp) ratew = max(ratew, cs/drdxi_c(i))
+              if (wave_cfl_max > 0.0_dp) ratew = max(ratew, merge(cs0, cs, wave_cfl_cs_only)/drdxi_c(i))
               crad = 0.0_dp
-              if (use_B) crad = va_eff(State_GVB(i, j, k, br_, iBlock)**2, rp(i), cell_cap(i, j, k, iBlock, cs0))
+              if (use_B .and. .not. si_alfven) &
+                  crad = va_eff(State_GVB(i, j, k, br_, iBlock)**2, rp(i), cell_cap(i, j, k, iBlock, cs0))
             end if
           end if
           rc = (abs(State_GVB(i, j, k, vr_, iBlock)) + crad)/drdxi_c(i) &
@@ -2164,9 +2180,13 @@ contains
       end do
       call cz_unbind()
       ! si_radial: the v_r tendencies of the implicit range through the column
-      ! operator, then those blocks' RK update
+      ! operator (si_alfven: v_theta, v_phi through theirs), then those blocks' RK update
       if (si_radial) then
-        call si_column_solve(siR_B(:, :, :, vr_, :))
+        call si_column_solve(siR_B(:, :, :, vr_, :), siS_B)
+        if (si_alfven) then
+          call si_column_solve(siR_B(:, :, :, vt_, :), siSa_B)
+          call si_column_solve(siR_B(:, :, :, vp_, :), siSa_B)
+        end if
         cdt = dt/real(5 - stage, dp)
         do jb = 1, size(iBlocks)
           ib = iBlocks(jb)
@@ -2230,7 +2250,7 @@ contains
           ib = iBlocks(jb)
           if (si_in(ib)) siX_B(:, :, :, ib) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_, ib) - siV_B(:, :, :, ib)
         end do
-        call si_column_solve(siX_B)
+        call si_column_solve(siX_B, siS_B)
         do jb = 1, size(iBlocks)
           ib = iBlocks(jb)
           if (si_in(ib)) State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_, ib) = siV_B(:, :, :, ib) + siX_B(:, :, :, ib)
