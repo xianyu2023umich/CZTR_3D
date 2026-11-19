@@ -14,6 +14,11 @@ data/static_init*.dat
 data/grid_*.dat
 !data/grid_full.dat
 !data/grid_r141.dat
+# the 0.47 deg production grid (c196_m0_r2c10_*): the Studio's exact files.
+# Regenerating them elsewhere changes the last digits, and restarts compare
+# the grid exactly (restart_domain_tol = 0)
+!data/grid_015a1.dat
+!data/static_init_015a1.dat
 data/static_profile.dat
 
 # Python, editors, OS
