@@ -2230,7 +2230,8 @@ contains
       call cz_unbind()
     end if
     if (use_diffusion) then
-      call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + dt)
+      ! (b_diff_form = 'resistive': the edge ghosts too, for the tangential derivatives at block faces)
+      call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.not. (use_B .and. b_diff_form == 'resistive'), time=t + dt)
       call join_bc()
       if (si_radial .and. si_diff_precond) then             ! (v_r before the diffusion)
         do jb = 1, size(iBlocks)
@@ -3463,7 +3464,7 @@ contains
       real(dp), intent(inout) :: F(1-di:nb(1), 1-dj:nb(2), 1-dk:nb(3), ie_)
       real(dp), intent(in) :: C(1-di:nb(1), 1-dj:nb(2), 1-dk:nb(3))
       integer :: i, j, k, v
-      real(dp) :: rho_m, jq
+      real(dp) :: rho_m, jq, du, w
       logical :: up
       do k = 1 - dk, nb(3)
         do j = 1 - dj, nb(2)
@@ -3511,18 +3512,105 @@ contains
           end do
         end do
       end if
-      ! the magnetic field and psi: -c J(q) (no density weight)
+      ! the magnetic field and psi: -c J(q) (no density weight); b_diff_form =
+      ! 'resistive': B's fluxes -c Phi K (see bface_current), none of the normal component
       do v = nVarCz + 1, nv
         do k = 1 - dk, nb(3)
           do j = 1 - dj, nb(2)
             do i = 1 - di, nb(1)
-              F(i, j, k, v) = -b_diff_factor*C(i, j, k)*jump4b(State_GVB(i-di, j-dj, k-dk, v, ib), State_GVB(i, j, k, v, ib), &
+              jq = jump4b(State_GVB(i-di, j-dj, k-dk, v, ib), State_GVB(i, j, k, v, ib), &
                   State_GVB(i+di, j+dj, k+dk, v, ib), State_GVB(i+2*di, j+2*dj, k+2*dk, v, ib))
+              if (b_diff_form == 'resistive' .and. v <= bp_) then
+                F(i, j, k, v) = 0.0_dp
+                if (v - br_ + 1 /= di + 2*dj + 3*dk) then
+                  du = State_GVB(i+di, j+dj, k+dk, v, ib) - State_GVB(i, j, k, v, ib)
+                  w = 1.0_dp
+                  if (du /= 0.0_dp) w = max(0.0_dp, min(1.0_dp, jq/du))
+                  F(i, j, k, v) = -b_diff_factor*C(i, j, k)*w*bface_current(di + 2*dj + 3*dk, v - br_ + 1, i, j, k)
+                end if
+              else
+                F(i, j, k, v) = -b_diff_factor*C(i, j, k)*jq
+              end if
             end do
           end do
         end do
       end do
     end subroutine faces_b
+
+    ! b_diff_form = 'resistive': ds_d (d_d B_m - d_m B_d) in spherical form at
+    ! the face between cell (i, j, k) and its neighbour in direction d (ds_d
+    ! the distance of the two cell centres), i.e. ds_d/(h_d h_m) [d_d(h_m B_m)
+    ! - d_m(h_d B_d)], h = (1, r, r sin theta): the normal derivative a compact
+    ! jump, the tangential one the mean of the two cells' central differences
+    real(dp) function bface_current(d, m, i, j, k) result(q)
+      integer, intent(in) :: d, m, i, j, k
+      real(dp) :: dx, rf, sf, a, b
+      associate (th => Metric_DB(2, ib)%X_I, ph => Metric_DB(3, ib)%X_I)
+      select case (d)
+      case (1)
+        dx = r_c(i+1) - r_c(i)
+        rf = 0.5_dp*(r_c(i) + r_c(i+1))
+        if (m == 2) then
+          a = dth(br_, i, j, k) + dth(br_, i+1, j, k)
+          q = (r_c(i+1)*bv(bt_, i+1, j, k) - r_c(i)*bv(bt_, i, j, k))/rf - 0.5_dp*dx*a/rf
+        else
+          a = dph(br_, i, j, k) + dph(br_, i+1, j, k)
+          q = (r_c(i+1)*bv(bp_, i+1, j, k) - r_c(i)*bv(bp_, i, j, k))/rf - 0.5_dp*dx*a/(rf*sin(th(j)))
+        end if
+      case (2)
+        dx = th(j+1) - th(j)
+        sf = sin(0.5_dp*(th(j) + th(j+1)))
+        if (m == 1) then
+          a = drr(bt_, i, j, k) + drr(bt_, i, j+1, k)
+          q = bv(br_, i, j+1, k) - bv(br_, i, j, k) - 0.5_dp*dx*a
+        else
+          a = dph(bt_, i, j, k) + dph(bt_, i, j+1, k)
+          q = (sin(th(j+1))*bv(bp_, i, j+1, k) - sin(th(j))*bv(bp_, i, j, k))/sf - 0.5_dp*dx*a/sf
+        end if
+      case default
+        dx = ph(k+1) - ph(k)
+        if (m == 1) then
+          a = drr(bp_, i, j, k) + drr(bp_, i, j, k+1)
+          q = bv(br_, i, j, k+1) - bv(br_, i, j, k) - 0.5_dp*dx*sin(th(j))*a
+        else
+          b = dthsin(i, j, k) + dthsin(i, j, k+1)
+          q = bv(bt_, i, j, k+1) - bv(bt_, i, j, k) - 0.5_dp*dx*b
+        end if
+      end select
+      end associate
+    end function bface_current
+
+    real(dp) function bv(c, i, j, k)
+      integer, intent(in) :: c, i, j, k
+      bv = State_GVB(i, j, k, c, ib)
+    end function bv
+
+    ! central differences at cell (i, j, k): d_theta B_c, d_phi B_c, d_r(r B_c), d_theta(sin theta B_phi)
+    real(dp) function dth(c, i, j, k)
+      integer, intent(in) :: c, i, j, k
+      associate (th => Metric_DB(2, ib)%X_I)
+        dth = (bv(c, i, j+1, k) - bv(c, i, j-1, k))/(th(j+1) - th(j-1))
+      end associate
+    end function dth
+
+    real(dp) function dph(c, i, j, k)
+      integer, intent(in) :: c, i, j, k
+      associate (ph => Metric_DB(3, ib)%X_I)
+        dph = (bv(c, i, j, k+1) - bv(c, i, j, k-1))/(ph(k+1) - ph(k-1))
+      end associate
+    end function dph
+
+    real(dp) function drr(c, i, j, k)
+      integer, intent(in) :: c, i, j, k
+      drr = (r_c(i+1)*bv(c, i+1, j, k) - r_c(i-1)*bv(c, i-1, j, k))/(r_c(i+1) - r_c(i-1))
+    end function drr
+
+    real(dp) function dthsin(i, j, k)
+      integer, intent(in) :: i, j, k
+      associate (th => Metric_DB(2, ib)%X_I)
+        dthsin = (sin(th(j+1))*bv(bp_, i, j+1, k) - sin(th(j-1))*bv(bp_, i, j-1, k))/(th(j+1) - th(j-1))
+      end associate
+    end function dthsin
 
     ! E: the energy the fluxes carry, with d(rho e) = T d(rho s) + (h - T s) d rho
     ! and d(rho v^2/2) = v.d(rho v) - (v^2/2) d rho:
