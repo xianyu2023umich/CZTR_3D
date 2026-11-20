@@ -2115,6 +2115,16 @@ contains
     real(dp), parameter :: c_stage(4) = [0.0_dp, 0.25_dp, 1.0_dp/3.0_dp, 0.5_dp]
     call local_steps(dt)
     dt_now = dt
+    if (test_b_diff_only) then                         ! (a test: the diffusion's B fluxes only)
+      call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.not. (use_B .and. b_diff_form == 'resistive'), time=t + dt)
+      call join_bc()
+      do jb = 1, size(iBlocks)
+        call cz_bind(iBlocks(jb))
+        call diffusion(iBlocks(jb), dt)
+      end do
+      call cz_unbind()
+      return
+    end if
     if (freeze_side /= 'none') then
       do jb = 1, size(iBlocks)
         ib = iBlocks(jb)
@@ -3303,6 +3313,10 @@ contains
       do j = 1, nb(2)
         do i = 1, nb(1)
           dti = tsc(i)*dt                                   ! (the shell's own step)
+          if (test_b_diff_only) then
+            if (use_B) State_GVB(i, j, k, br_:psi_, ib) = State_GVB(i, j, k, br_:psi_, ib) - dti*Div_CV(i, j, k, br_:psi_)
+            cycle
+          end if
           rho_new = rho_G(i, j, k) - dti*Div_CV(i, j, k, 1)
           s1o = State_GVB(i, j, k, s1_, ib)
           if (rsst_h2015) then

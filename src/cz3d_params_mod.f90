@@ -220,6 +220,10 @@ module cz3d_params_mod
   ! keeps the component form. Needs the edge ghosts (filled before the
   ! diffusion)
   character(len=12) :: b_diff_form = 'component'
+  ! test_b_diff_only (a test): each step applies only the diffusion's fluxes
+  ! of B and psi (the gas, the other terms and operators frozen): how the
+  ! diffusion alone changes the initial field
+  logical :: test_b_diff_only = .false.
   real(dp) :: glm_cfl_frac = 0.8_dp
   ! walls: 'conductor' (B_r = 0, B_h mirrored) or 'radial' (B_h = 0, B_r
   ! mirrored: the field vertical at the wall); Hotta et al. 2014: conductor at
@@ -519,7 +523,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ b_diff_form, b_diffusion_h, b_diff_limiter, cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ test_b_diff_only, b_diff_form, b_diffusion_h, b_diff_limiter, cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
