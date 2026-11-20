@@ -3516,7 +3516,7 @@ contains
         do k = 1 - dk, nb(3)
           do j = 1 - dj, nb(2)
             do i = 1 - di, nb(1)
-              F(i, j, k, v) = -b_diff_factor*C(i, j, k)*jump4(State_GVB(i-di, j-dj, k-dk, v, ib), State_GVB(i, j, k, v, ib), &
+              F(i, j, k, v) = -b_diff_factor*C(i, j, k)*jump4b(State_GVB(i-di, j-dj, k-dk, v, ib), State_GVB(i, j, k, v, ib), &
                   State_GVB(i+di, j+dj, k+dk, v, ib), State_GVB(i+2*di, j+2*dj, k+2*dk, v, ib))
             end do
           end do
@@ -3824,6 +3824,32 @@ contains
     phi = merge(max(0.0_dp, 1.0_dp + diffusion_h*(url/du - 1.0_dp)), 0.0_dp, du /= 0.0_dp)
     jj = merge(phi*url, du, use_minmod)
   end function jump4
+
+  ! jump4 for the field and psi: h = b_diffusion_h (< 0: diffusion_h), the
+  ! slopes minmod or MC (b_diff_limiter); the face mismatch u_r - u_l =
+  ! du - (slope_2 + slope_3)/2, no flux where it opposes du (no anti-diffusion)
+  elemental real(dp) function jump4b(q1, q2, q3, q4) result(jj)
+    real(dp), intent(in) :: q1, q2, q3, q4
+    real(dp) :: du, url, phi, h, s2, s3
+    if (b_diffusion_h < 0.0_dp .and. b_diff_limiter == 'minmod') then
+      jj = jump4(q1, q2, q3, q4)
+      return
+    end if
+    h = merge(diffusion_h, b_diffusion_h, b_diffusion_h < 0.0_dp)
+    du = q3 - q2
+    if (b_diff_limiter == 'mc') then
+      s2 = minmod2(0.5_dp*(q3 - q1), minmod2(2.0_dp*(q3 - q2), 2.0_dp*(q2 - q1)))
+      s3 = minmod2(0.5_dp*(q4 - q2), minmod2(2.0_dp*(q4 - q3), 2.0_dp*(q3 - q2)))
+      url = du - 0.5_dp*(s2 + s3)
+    else
+      url = du - 0.5_dp*(minmod2(q2 - q1, du) + minmod2(du, q4 - q3))
+    end if
+    phi = 0.0_dp
+    if (du /= 0.0_dp) then
+      if (url/du > 0.0_dp) phi = max(0.0_dp, 1.0_dp + h*(url/du - 1.0_dp))
+    end if
+    jj = merge(phi*url, du, use_minmod)
+  end function jump4b
 
   elemental real(dp) function minmod2(a, b)
     real(dp), intent(in) :: a, b
