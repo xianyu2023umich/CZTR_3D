@@ -214,18 +214,32 @@ module cz3d_params_mod
   ! normal to d the flux of B_m (m /= d) is -eta (d_d B_m - d_m B_d) with the
   ! spherical metric factors, none of B_d; the normal derivative a compact jump
   ! across the face, the tangential one the mean of the two cells' central
-  ! differences; eta = Phi C ds, Phi in [0, 1] the limiter's weight of B_m's
-  ! jump (b_diffusion_h, b_diff_limiter). A potential field carries no
-  ! current and is not diffused (to the stencils' truncation error); psi
-  ! keeps the component form. Needs the edge ghosts (filled before the
-  ! diffusion)
-  ! NOT FOR USE (2026-11-20): anti-dissipative with this grid. Each current
-  ! component's two terms get different eta (C dr on radial faces, C r dtheta
-  ! on horizontal ones, ~1e3 apart at the TR); the pair's dissipation
-  ! (a - b)(eta_r a - eta_h b) is then negative for some fields. The
-  ! diffusion-only test (test_b_diff_only) grew the field at the join to
-  ! 5 kG in 8 min. A dissipative form needs one eta per pair (the radial
-  ! part implicit)
+  ! differences). One scalar eta field for every current component, so each
+  ! pair of terms of a current gets the same eta (dissipative):
+  !   eta = b_diff_factor Phi (|v| + c)/2 dh   per cell, the face eta the mean
+  ! of its two cells; dh the cell's horizontal width (the smaller of r dtheta,
+  ! r sin(theta) dphi), c = c_s + v_A (derived), Phi the largest limiter weight
+  ! (b_diffusion_h, b_diff_limiter) of the three components' jumps at the
+  ! cell's six faces. The radial normal term d_r(r B_h) on the radial faces
+  ! (eta dh/dr^2 ~ 1e3 times the explicit limit at the TR) is implicit: one
+  ! tridiagonal solve per column and component after the explicit fluxes
+  ! (the end faces' ghost values explicit); the mixed terms stay explicit
+  ! (stable for any dt where the horizontal part is: the split keeps a
+  ! curl-free mode neutral). With diffusion_heating the field energy the solve
+  ! removes in the CZ goes into s1. A potential field carries no current (to
+  ! the stencils' truncation error); psi keeps the component form. Needs
+  ! si_radial (whole columns per rank) with the full column implicit
+  ! (si_z_km default) and the edge ghosts (filled before the diffusion).
+  ! (2026-11-20: an earlier version with eta = Phi C ds per face, C dr on
+  ! radial faces and C r dtheta on horizontal ones, was anti-dissipative:
+  ! the join's field grew to 5 kG in the diffusion-only test)
+  ! Test (2026-11-20, mhd5 + DPF at 1.875 deg, diffusion only, h = 5 MC,
+  ! 479 s): stable (max |B| 3.1 -> 2.7 kG, div B 4.9e-3 -> 1.4e-2) but it
+  ! changes the corona more than the component form (rms change 64/99/73/52%
+  ! at 1.1/3/10/20 Mm vs 32/76/67/53%, and still drifting 5-10% per 50 s):
+  ! Phi ~ 1 at the field's grid-scale concentrations, and the radial term
+  ! then carries eta ~ c dh too. About 2x the component form's cost in that
+  ! test (the eta pass, its ghost fill, the column solves)
   character(len=12) :: b_diff_form = 'component'
   ! test_b_diff_only (a test): each step applies only the diffusion's fluxes
   ! of B and psi (the gas, the other terms and operators frozen): how the
@@ -575,6 +589,8 @@ contains
         call arbor_abort('freeze_side = atmosphere needs freeze_cz_mode = ghost')
     if (si_radial .and. (dt1 > 0.0_dp .or. mr_levels > 1)) call arbor_abort('si_radial needs global steps (dt1 = 0, mr_levels <= 1)')
     if (b_diff_form /= 'component' .and. b_diff_form /= 'resistive') call arbor_abort('b_diff_form must be component or resistive')
+    if (use_B .and. use_diffusion .and. b_diff_form == 'resistive' .and. .not. si_radial) &
+        call arbor_abort("b_diff_form = 'resistive' needs si_radial (its radial term is solved per column)")
     if (b_diff_limiter /= 'minmod' .and. b_diff_limiter /= 'mc') call arbor_abort('b_diff_limiter must be minmod or mc')
     if (si_alfven .and. .not. (si_radial .and. use_B)) call arbor_abort('si_alfven needs si_radial and use_B')
     if (si_radial .and. freeze_side /= 'none') call arbor_abort('si_radial needs freeze_side = none')
