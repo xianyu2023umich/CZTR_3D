@@ -219,6 +219,13 @@ module cz3d_params_mod
   ! current and is not diffused (to the stencils' truncation error); psi
   ! keeps the component form. Needs the edge ghosts (filled before the
   ! diffusion)
+  ! NOT FOR USE (2026-11-20): anti-dissipative with this grid. Each current
+  ! component's two terms get different eta (C dr on radial faces, C r dtheta
+  ! on horizontal ones, ~1e3 apart at the TR); the pair's dissipation
+  ! (a - b)(eta_r a - eta_h b) is then negative for some fields. The
+  ! diffusion-only test (test_b_diff_only) grew the field at the join to
+  ! 5 kG in 8 min. A dissipative form needs one eta per pair (the radial
+  ! part implicit)
   character(len=12) :: b_diff_form = 'component'
   ! test_b_diff_only (a test): each step applies only the diffusion's fluxes
   ! of B and psi (the gas, the other terms and operators frozen): how the
