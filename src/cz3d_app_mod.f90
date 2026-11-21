@@ -147,6 +147,7 @@ module cz3d_app_mod
   logical :: at_bottom = .true., at_top = .true.
   ! freeze_cz: each block's state at its first step (cells r_off + i <= k_join restored after every step)
   real(dp), allocatable :: frz_B(:,:,:,:,:)
+  real(dp), allocatable :: fzb_B(:,:,:,:,:)            ! test_freeze_b: the stored B, psi
   logical :: join_wall_lo = .false., join_wall_hi = .false.   ! (cz_bind: the join as a face wall for the mass flux, ghost mode)
   logical, allocatable :: frz_have(:)
   real(dp), allocatable :: work_CB(:,:,:,:)       ! W per cell from the step's first RK stage
@@ -173,7 +174,7 @@ module cz3d_app_mod
   integer, parameter :: nAcc = 18
   real(dp), allocatable :: bgf_r(:)
 
-  public :: cz_columns_to_ranks, cz_import_cz, cz_match_base, cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
+  public :: cz_smooth_b, cz_columns_to_ranks, cz_import_cz, cz_match_base, cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
 
 contains
 
@@ -2064,7 +2065,7 @@ contains
   end subroutine si_column_solve
 
   ! b_diff_form = 'resistive': each cell's eta = b_diff_factor Phi (|v| + c)/2 dh
-  ! (see b_diff_form), then its ghosts (one layer; at the radial walls the
+  ! (see b_diff_form; b_eta_dr > 0: b_eta_dr (|v| [+ c_s]) dr/2), then its ghosts (one layer; at the radial walls the
   ! boundary cell's value). Needs the ghosts of State (two layers) filled.
   subroutine b_eta_fill(iBlocks)
     integer, intent(in) :: iBlocks(:)
@@ -2073,6 +2074,19 @@ contains
     do jb = 1, size(iBlocks)
       ib = iBlocks(jb)
       call cz_bind(ib)
+      if (b_eta_dr > 0.0_dp) then                        ! (CZTR_2D's eta = b_eta_dr (|v| [+ c_s]) dr/2)
+        if (b_eta_cs) call derived(ib, .false.)
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            do i = 1, nb(1)
+              w = sqrt(sum(State_GVB(i, j, k, vr_:vp_, ib)**2))
+              if (b_eta_cs) w = w + cell_cs(i, j, k, rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib))
+              EtaB_GB(i, j, k, 1, ib) = b_eta_dr*w*0.5_dp*(r_f(i) - r_f(i-1))
+            end do
+          end do
+        end do
+        cycle
+      end if
       call derived(ib, .true.)
       associate (th => Metric_DB(2, ib)%X_I, dth_ => Metric_DB(2, ib)%Dx_I, dph_ => Metric_DB(3, ib)%Dx_I)
       do k = 1, nb(3)
@@ -2112,6 +2126,86 @@ contains
       if ((Key_IB(KI+1, ib) + 1)*nb(1) == n_r) EtaB_GB(nb(1)+1, :, :, 1, ib) = EtaB_GB(nb(1), :, :, 1, ib)
     end do
   end subroutine b_eta_fill
+
+  ! b_smooth_cells > 0 (see cz3d_params_mod): the CZ's field smoothed before
+  ! the PFSS/DPF seed, each spherical component of B on each shell by the same
+  ! explicit horizontal diffusion in angle (independent of r, so it commutes
+  ! with the radial part of div B; the curvature terms of the components are
+  ! left out, an O(dtheta^2) error): per pass
+  !   B += D [(1/s) d_th(s d_th B) + d_ph^2 B/s^2],  D = 0.1 min(dth, s dph)^2,  s = sin(theta)
+  ! n = b_smooth_cells^2/0.2 passes (diffusion length b_smooth_cells cells).
+  ! The CZ cells only (with the atmosphere: up to the join); psi set to 0.
+  subroutine cz_smooth_b()
+    integer :: n, it, jb, ib, i, j, k, c
+    real(dp) :: acc(4), t0, w, dth, dph, st, sp, sm, dd
+    real(dp), allocatable :: B0(:,:,:,:,:), X(:,:,:)
+    character(len=200) :: msg
+    if (b_smooth_cells <= 0.0_dp) return
+    t0 = arbor_wtime()
+    n = max(1, ceiling(b_smooth_cells**2/0.2_dp))
+    allocate(B0(nb(1), nb(2), nb(3), br_:bp_, size(State_GVB, 5)), X(nb(1), nb(2), nb(3)))
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      B0(:, :, :, :, ib) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), br_:bp_, ib)
+    end do
+    do it = 1, n
+      call arbor_fill_ghosts(State_GVB, iVarMin=br_, iVarMax=bp_, n_ghost=1, faces_only=.true.)
+      do jb = 1, nBlock
+        ib = iBlockList_I(jb)
+        if (use_atmosphere .and. Key_IB(KI+1, ib)*nb(1) >= k_join) cycle
+        associate (th => Metric_DB(2, ib)%X_I, dth_ => Metric_DB(2, ib)%Dx_I, dph_ => Metric_DB(3, ib)%Dx_I)
+        do c = br_, bp_
+          do k = 1, nb(3)
+            do j = 1, nb(2)
+              dth = dth_(j)
+              dph = dph_(k)
+              st = sin(th(j))
+              sp = sin(th(j) + 0.5_dp*dth)
+              sm = sin(th(j) - 0.5_dp*dth)
+              dd = 0.1_dp*min(dth, st*dph)**2
+              X(:, j, k) = State_GVB(1:nb(1), j, k, c, ib) + dd*( &
+                  (sp*(State_GVB(1:nb(1), j+1, k, c, ib) - State_GVB(1:nb(1), j, k, c, ib)) &
+                  - sm*(State_GVB(1:nb(1), j, k, c, ib) - State_GVB(1:nb(1), j-1, k, c, ib)))/(st*dth**2) &
+                  + (State_GVB(1:nb(1), j, k+1, c, ib) - 2.0_dp*State_GVB(1:nb(1), j, k, c, ib) &
+                  + State_GVB(1:nb(1), j, k-1, c, ib))/(st*dph)**2)
+            end do
+          end do
+          do i = 1, nb(1)
+            if (use_atmosphere .and. Key_IB(KI+1, ib)*nb(1) + i > k_join) cycle
+            State_GVB(i, 1:nb(2), 1:nb(3), c, ib) = X(i, :, :)
+          end do
+        end do
+        end associate
+      end do
+    end do
+    ! report: rms |B - B0| / rms |B| over the CZ's top 3 Mm and over the whole CZ (volume weighted)
+    acc = 0.0_dp
+    call cz_unbind()
+    w = r_f(merge(k_join, n_r, use_atmosphere))
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      State_GVB(:, :, :, psi_, ib) = 0.0_dp
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          do i = 1, nb(1)
+            if (use_atmosphere .and. r_off + i > k_join) cycle
+            dd = r_c(i)**2*(r_f(i) - r_f(i-1))*Metric_DB(2, ib)%Vol_I(j)*Metric_DB(3, ib)%Vol_I(k)
+            st = sum((State_GVB(i, j, k, br_:bp_, ib) - B0(i, j, k, :, ib))**2)
+            sp = sum(B0(i, j, k, :, ib)**2)
+            acc(3:4) = acc(3:4) + dd*[st, sp]
+            if (w - r_c(i) < 3.0e8_dp) acc(1:2) = acc(1:2) + dd*[st, sp]
+          end do
+        end do
+      end do
+    end do
+    call cz_unbind()
+    call arbor_sum_inplace(acc)
+    write(msg, '(A,F6.2,A,I0,A,ES10.3,A,ES10.3,A,F8.2,A)') '  b_smooth: ', b_smooth_cells, ' cells, ', n, &
+        ' passes: rms|dB|/rms|B| ', sqrt(acc(1)/max(acc(2), tiny(1.0_dp))), ' (top 3 Mm of the CZ), ', &
+        sqrt(acc(3)/max(acc(4), tiny(1.0_dp))), ' (CZ); ', arbor_wtime() - t0, ' s'
+    call arbor_print(msg)
+  end subroutine cz_smooth_b
 
   ! b_diff_form = 'resistive': the radial normal term of B_theta and B_phi
   ! implicit, along every local column (the whole column):
@@ -2278,6 +2372,12 @@ contains
     real(dp), parameter :: c_stage(4) = [0.0_dp, 0.25_dp, 1.0_dp/3.0_dp, 0.5_dp]
     call local_steps(dt)
     dt_now = dt
+    if (test_freeze_b .and. use_B .and. .not. allocated(fzb_B)) then
+      allocate(fzb_B(nb(1), nb(2), nb(3), br_:psi_, size(State_GVB, 5)))
+      do jb = 1, size(iBlocks)
+        fzb_B(:, :, :, :, iBlocks(jb)) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), br_:psi_, iBlocks(jb))
+      end do
+    end if
     if (test_b_diff_only) then                         ! (a test: the diffusion's B fluxes only)
       call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.not. (use_B .and. b_diff_form == 'resistive'), time=t + dt)
       call join_bc()
@@ -2325,6 +2425,7 @@ contains
         want_work = budget_on .and. stage == 1
         if (si_radial .and. stage == 1) call si_coeff(ib, dt)
         call rhs(ib)
+        if (allocated(fzb_B)) R_CV(:, :, :, br_:psi_) = 0.0_dp     ! (test_freeze_b)
         want_work = .false.
         ! the RK update, with each shell's step factor tsc (local time stepping):
         ! one pass in memory order (the same arithmetic as scaling R_CV first)
@@ -2512,6 +2613,11 @@ contains
       do jb = 1, size(iBlocks)
         ib = iBlocks(jb)
         if (block_frozen(ib)) State_GVB(1:nb(1), 1:nb(2), 1:nb(3), 1:nv, ib) = frz_B(:, :, :, :, ib)
+      end do
+    end if
+    if (allocated(fzb_B)) then                        ! test_freeze_b: the field back
+      do jb = 1, size(iBlocks)
+        State_GVB(1:nb(1), 1:nb(2), 1:nb(3), br_:psi_, iBlocks(jb)) = fzb_B(:, :, :, :, iBlocks(jb))
       end do
     end if
     dt_last = dt
@@ -4684,13 +4790,13 @@ contains
   ! point, 0 in a margin), v_r, the horizontal velocity as a global Cartesian
   ! vector, rho1/rho0, s1
   subroutine dump_shells_write()
-    real(dp) :: th, ph, th2, ph2, e(3,3), x(3), vh(3), w
+    real(dp) :: th, ph, th2, ph2, e(3,3), x(3), vh(3), w, bvec(3)
     integer :: u, jb, ib, j, k, n, i
     character(len=300) :: name
     if (all(dump_shells <= 0)) return
     write(name, '(A,A,I4.4,A)') trim(out_dir), '/shell_dump_r', my_rank, '.dat'
     open(newunit=u, file=trim(name), status='replace', action='write')
-    write(u, '(A)') '# i  patch  x  y  z  weight  v_r  vh_x  vh_y  vh_z [cm/s]  rho1/rho0  s1'
+    write(u, '(A)') '# i  patch  x  y  z  weight  v_r  vh_x  vh_y  vh_z [cm/s]  rho1/rho0  s1  (use_B: B_x  B_y  B_z [G])'
     do jb = 1, nBlock
       ib = iBlockList_I(jb)
       call cz_bind(ib)
@@ -4715,8 +4821,16 @@ contains
               x = yy_cart(x)
               vh = yy_cart(vh)
             end if
-            write(u, '(2I5,3F12.8,ES14.6,4ES14.6,2ES14.6)') r_off + i, Key_IB(KP, ib), x, w, State_GVB(i, j, k, vr_, ib), vh, &
-                State_GVB(i, j, k, rho1_, ib)/rho0(i), State_GVB(i, j, k, s1_, ib)
+            if (use_B) then
+              bvec = State_GVB(i, j, k, br_, ib)*e(:, 1) + State_GVB(i, j, k, bt_, ib)*e(:, 2) &
+                  + State_GVB(i, j, k, bp_, ib)*e(:, 3)
+              if (Key_IB(KP, ib) == 2) bvec = yy_cart(bvec)
+              write(u, '(2I5,3F12.8,ES14.6,4ES14.6,2ES14.6,3ES14.6)') r_off + i, Key_IB(KP, ib), x, w, &
+                  State_GVB(i, j, k, vr_, ib), vh, State_GVB(i, j, k, rho1_, ib)/rho0(i), State_GVB(i, j, k, s1_, ib), bvec
+            else
+              write(u, '(2I5,3F12.8,ES14.6,4ES14.6,2ES14.6)') r_off + i, Key_IB(KP, ib), x, w, State_GVB(i, j, k, vr_, ib), vh, &
+                  State_GVB(i, j, k, rho1_, ib)/rho0(i), State_GVB(i, j, k, s1_, ib)
+            end if
           end do
         end do
       end do

@@ -131,8 +131,10 @@ program cz3d_run
   end if
   ! the PFSS field above the join from the CZ's B_r: on a fresh start, an
   ! import, or a hydrodynamic restart (not on a restart that has B)
-  if (use_B .and. (b_seed == 'pfss' .or. b_seed == 'dpf') .and. (len_trim(restart_from) == 0 .or. n_var_file < cz_n_var())) &
-      call cz_seed_pfss()
+  if (use_B .and. (b_seed == 'pfss' .or. b_seed == 'dpf') .and. (len_trim(restart_from) == 0 .or. n_var_file < cz_n_var())) then
+    call cz_smooth_b()                               ! (b_smooth_cells > 0: the CZ's field smoothed horizontally first)
+    call cz_seed_pfss()
+  end if
   if (is_root) call execute_command_line('mkdir -p '//trim(out_dir))
   call arbor_barrier()
   if (is_root) call write_background()
