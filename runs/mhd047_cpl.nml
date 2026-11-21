@@ -19,6 +19,9 @@
 ! Synthetic AIA images every 10 min of model time from 4 sides (lon 0, 90,
 ! 180, 270 at the equator; 512^2, +-1.3 R_sun; data/aia_response.dat):
 ! out_dir/euv_*.bin, plot with tools/euv_plot.py.
+! With the same views: the AIA 1600/1700/4500 continua (LTE, phot_band_file;
+! out_dir/photb_*.bin, DN/s/pix); the EUV table also carries 1600/1700 TR
+! lines (C IV ...): tools/phot_plot.py photb_N.bin --euv euv_N.bin.
 !   sbatch -N 6 --ntasks-per-node 96 -t 04:00:00 tools/job.stampede3_spr4 runs/mhd047_cpl.nml
 &cz3d
   grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
@@ -48,6 +51,7 @@
   dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
   box_lat_deg = -44.0, box_lon_deg = 134.0, box_radius_deg = 3.0, box_z_km = -2000.0, 30000.0, box_every = 500
   euv_dt = 600.0, euv_n_view = 4, euv_lon_deg = 0.0, 90.0, 180.0, 270.0, euv_lat_deg = 0.0, 0.0, 0.0, 0.0
-  euv_npix = 512, euv_fov_rsun = 1.3, euv_table = 'data/aia_response.dat'
+  euv_npix = 512, euv_fov_rsun = 1.3, euv_table = 'data/aia_response_uv.dat'
+  phot_band_file = 'data/aia_uv_bands.dat'
   wall_time_margin = 900.0
 /
