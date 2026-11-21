@@ -53,7 +53,11 @@ module cztr3d_atm_mod
   real(dp), allocatable :: rho_A(:,:,:), T_A(:,:,:), cv_A(:,:,:), cs_A(:,:,:), ne_A(:,:,:), p_A(:,:,:)
   real(dp), allocatable :: F1(:,:,:,:), F2(:,:,:,:), F3(:,:,:,:), Dv(:,:,:,:)
 
-  public :: atm_init, atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, atm_switch, trac_f
+  integer :: tm_st = 0, tm_co = 0, tm_lo = 0     ! (ARBOR timers of atm_block's parts)
+  ! the interior columns' states (with radial ghosts) per block, from states_interior:
+  ! (0:nb(1)+1, j, k, 1 rho 2 T 3 cv 4 ne 5 p 6 cs, block)
+  real(dp), allocatable :: stI_B(:,:,:,:,:)
+  public :: atm_init, atm_setup, atm_block, atm_losses, states_interior, atm_active, atm_floors, atm_dt, atm_tr_heights, atm_switch, trac_f
 
 contains
 
@@ -137,17 +141,32 @@ contains
   ! stf(0:nb(1)+1): the step factors of the cells (local time stepping; with
   ! the cells below and above the block): cell i advances stf(i) dt, a radial
   ! face the smaller step of its two cells
-  subroutine atm_block(ib, dt_in, at_bot, at_top, stf)
+  subroutine atm_block(ib, dt_in, at_bot, at_top, stf, losses_ready)
     integer, intent(in) :: ib
     real(dp), intent(in) :: dt_in
     logical, intent(in) :: at_bot, at_top
     real(dp), intent(in) :: stf(0:)
+    logical, intent(in), optional :: losses_ready   ! Qloss_B, Qheat_B already this state's (atm_losses), states stored
+    logical :: ready
     real(dp) :: Tf, rf, Tg, csf, cvf, dxf, vf, x, dQ, Sc, Sf, sth, dt, fS, qcl, gt(3), bf(3), aniso
     real(dp) :: colH(nb(1)), dr, qd, ionH, lT, w, nHt, QH, iH, QCa, iCa, QMg, iMg, chromo, coron, Qheat, Qlos, colm
     integer :: i, j, k, m
     m = nb(1)
     if (maxval(atm_switch(z_c(1:m))) < 1.0e-8_dp .and. atm_switch(r_f(m) - r_top_cz) < 1.0e-8_dp) return  ! (deep CZ block)
-    call states(ib)
+    if (tm_st == 0) then
+      tm_st = arbor_timer_id('atm: states');  tm_co = arbor_timer_id('atm: conduction')
+      tm_lo = arbor_timer_id('atm: losses, heating')
+    end if
+    call arbor_timer_start(tm_st)
+    ready = .false.
+    if (present(losses_ready)) ready = losses_ready
+    if (ready) then
+      call states_from_store(ib, at_bot, at_top)
+    else
+      call states(ib)
+    end if
+    call arbor_timer_stop(tm_st)
+    call arbor_timer_start(tm_co)
     aniso = merge(1.0_dp, 0.0_dp, cond_along_b .and. use_B)
     associate (X2 => Metric_DB(2, ib)%X_I, X3 => Metric_DB(3, ib)%X_I)
     if (use_conduction) then
@@ -273,6 +292,85 @@ contains
       end do
     end if
 
+    call arbor_timer_stop(tm_co)
+    call arbor_timer_start(tm_lo)
+    ! losses and heating (the state before the conduction: computed by
+    ! atm_losses, during the ghost fill when losses_ready), applied now
+    if (.not. ready) call atm_losses(ib, at_top)
+    do k = 1, nb(3)
+      do j = 1, nb(2)
+        do i = 1, m
+          State_GVB(i, j, k, S1, ib) = State_GVB(i, j, k, S1, ib) &
+              + dt_in*stf(i)*(Qheat_B(i, j, k, ib) - Qloss_B(i, j, k, ib))/(rho_A(i, j, k)*T_A(i, j, k))
+        end do
+      end do
+    end do
+    call arbor_timer_stop(tm_lo)
+    end associate
+
+  contains
+
+    ! The (r, theta, phi) gradient of T at interior cell (i, j, k) of the block
+    ! (central differences; the ghost layers next to the interior are filled)
+    function grad_cell(i, j, k) result(g)
+      integer, intent(in) :: i, j, k
+      real(dp) :: g(3)
+      associate (Y2 => Metric_DB(2, ib)%X_I, Y3 => Metric_DB(3, ib)%X_I)
+        g(1) = (T_A(i+1, j, k) - T_A(i-1, j, k))/(r_c(i+1) - r_c(i-1))
+        g(2) = (T_A(i, j+1, k) - T_A(i, j-1, k))/(r_c(i)*(Y2(j+1) - Y2(j-1)))
+        g(3) = (T_A(i, j, k+1) - T_A(i, j, k-1))/(r_c(i)*sin(Y2(j))*(Y3(k+1) - Y3(k-1)))
+      end associate
+    end function grad_cell
+
+    ! The gradient that drives the face flux along direction d at height zf
+    ! [cm] (cond_along_b): (<b b> g)_d with the unresolved vertical field of
+    ! rms dB_r(z) and the isotropic part b_iso_G,
+    !   <b b> = (B B + dB_r^2 e_r e_r + b_iso^2 I)/(B^2 + dB_r^2 + b_iso^2)
+    ! dB_r(z) = cond_dB0_G (1 - tanh((z - cond_dB_zj_km)/cond_dB_w_km))/2
+    ! (0 when cond_dB0_G = 0: then w b_d (b.g) + (1 - w) g_d, w = B^2/(B^2 + b_iso^2))
+    real(dp) function along_b(g, bv, d, zf) result(gd)
+      real(dp), intent(in) :: g(3), bv(3), zf
+      integer, intent(in) :: d
+      real(dp) :: db2, dn
+      db2 = 0.0_dp
+      if (cond_dB0_G > 0.0_dp) &
+          db2 = (cond_dB0_G*0.5_dp*(1.0_dp - tanh((zf - cond_dB_zj_km*1.0e5_dp)/(cond_dB_w_km*1.0e5_dp))))**2
+      dn = sum(bv**2) + db2 + b_iso_G**2
+      gd = (bv(d)*dot_product(bv, g) + b_iso_G**2*g(d))/dn
+      if (d == 1) gd = gd + db2*g(1)/dn
+    end function along_b
+
+    ! CZTR's hyperbolic face flux: target -fsat k0 T^2.5 dT/dx, relaxed;
+    ! fS: the Spitzer weight, qcl: the collisionless flux (weight 1 - fS)
+    subroutine face_flux(Sf, Tf, rf, csf, cvf, Tg, dx, vf, q, fS, qcl)
+      real(dp), intent(in) :: Sf, Tf, rf, csf, cvf, Tg, dx, vf, fS, qcl
+      real(dp), intent(inout) :: q
+      real(dp) :: k0, Fc, qt, D, budget, tau
+      k0 = Sf*(kappa0_spitzer/trac_f(Tf) + blend_weight(Tf, T_SWITCH, T_SWITCH_WIDTH)*extra_h_kappa0(hcond_tab, log10(Tf)))
+      Fc = k0*Tf**2.5_dp*Tg
+      qt = -Fc/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
+      qt = fS*qt + (1.0_dp - fS)*Sf*qcl
+      D = fS*k0*Tf**2.5_dp/(rf*cvf)
+      ! (cond_tau_fsat: the saturation factor also in tau, Rempel 2017 eq. 16 with
+      ! f_sat: lower tau where the flux saturates, the flux follows its target)
+      if (cond_tau_fsat) D = D/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
+      budget = max(f_cfl_cond*dx/dt - vf, 1.0e-3_dp*dx/dt)
+      tau = max(D/budget**2, 4.0_dp*dt)
+      q = qt + (q - qt)*exp(-dt/tau)
+    end subroutine face_flux
+  end subroutine atm_block
+
+  ! The losses Qloss_B and the heating Qheat_B [erg cm^-3 s^-1] of block ib's
+  ! interior cells from the block's states (rho_A, T_A, p_A, ne_A of the
+  ! interior and its radial ghosts: states_interior or states), the state
+  ! before the conduction. at_top: the block holds the domain's top wall
+  subroutine atm_losses(ib, at_top)
+    integer, intent(in) :: ib
+    logical, intent(in) :: at_top
+    real(dp) :: colH(nb(1)), dr, qd, ionH, lT, w, nHt, QH, iH, QCa, iCa, QMg, iMg, chromo, coron, Qheat, Qlos, colm, &
+        Sc, x
+    integer :: i, j, k, m
+    m = nb(1)
     ! losses and heating (the state before the conduction)
     do k = 1, nb(3)
       do j = 1, nb(2)
@@ -326,70 +424,74 @@ contains
           end if
           Qloss_B(i, j, k, ib) = Qlos
           Qheat_B(i, j, k, ib) = Qheat
-          State_GVB(i, j, k, S1, ib) = State_GVB(i, j, k, S1, ib) + dt_in*stf(i)*(Qheat - Qlos)/(rho_A(i, j, k)*T_A(i, j, k))
         end do
       end do
     end do
-    end associate
+  end subroutine atm_losses
 
-  contains
+  ! The states of block ib's interior columns with their radial ghosts (what
+  ! atm_losses reads; the radial neighbours are on this rank with si_radial)
+  ! They are kept per block (stI_B) for atm_block (losses_ready): it then
+  ! evaluates only the horizontal ghost columns
+  subroutine states_interior(ib)
+    integer, intent(in) :: ib
+    integer :: j, k, m
+    m = nb(1)
+    if (.not. allocated(stI_B)) allocate(stI_B(0:m+1, nb(2), nb(3), 6, size(State_GVB, 5)))
+    if (size(stI_B, 5) /= size(State_GVB, 5)) then
+      deallocate(stI_B)
+      allocate(stI_B(0:m+1, nb(2), nb(3), 6, size(State_GVB, 5)))
+    end if
+    do k = 1, nb(3)
+      do j = 1, nb(2)
+        call column_states(ib, 0, m + 1, j, k)
+        stI_B(:, j, k, 1, ib) = rho_A(0:m+1, j, k);  stI_B(:, j, k, 2, ib) = T_A(0:m+1, j, k)
+        stI_B(:, j, k, 3, ib) = cv_A(0:m+1, j, k);  stI_B(:, j, k, 4, ib) = ne_A(0:m+1, j, k)
+        stI_B(:, j, k, 5, ib) = p_A(0:m+1, j, k);  stI_B(:, j, k, 6, ib) = cs_A(0:m+1, j, k)
+      end do
+    end do
+  end subroutine states_interior
 
-    ! |B| for the field-strength heating, saturated at H_B_sat_G (> 0)
-    real(dp) function bsat(b)
-      real(dp), intent(in) :: b
-      bsat = b
-      if (H_B_sat_G > 0.0_dp) bsat = min(b, H_B_sat_G)
-    end function bsat
+  ! states with the interior columns from states_interior's store (the same
+  ! values), the horizontal ghost columns evaluated, and the radial ghost
+  ! at a physical wall (at_bot/at_top) too: ARBOR applies the boundary of a
+  ! block that waits for messages only at the fill's end
+  subroutine states_from_store(ib, at_bot, at_top)
+    integer, intent(in) :: ib
+    logical, intent(in) :: at_bot, at_top
+    integer :: j, k, m
+    m = nb(1)
+    do k = 1, nb(3)
+      do j = 1, nb(2)
+        rho_A(0:m+1, j, k) = stI_B(:, j, k, 1, ib);  T_A(0:m+1, j, k) = stI_B(:, j, k, 2, ib)
+        cv_A(0:m+1, j, k) = stI_B(:, j, k, 3, ib);  ne_A(0:m+1, j, k) = stI_B(:, j, k, 4, ib)
+        p_A(0:m+1, j, k) = stI_B(:, j, k, 5, ib);  cs_A(0:m+1, j, k) = stI_B(:, j, k, 6, ib)
+        if (at_bot) call column_states(ib, 0, 0, j, k)
+        if (at_top) call column_states(ib, m + 1, m + 1, j, k)
+      end do
+      call column_states(ib, 1, m, 0, k)
+      call column_states(ib, 1, m, nb(2) + 1, k)
+    end do
+    do j = 1, nb(2)
+      call column_states(ib, 1, m, j, 0)
+      call column_states(ib, 1, m, j, nb(3) + 1)
+    end do
+  end subroutine states_from_store
 
-    ! The (r, theta, phi) gradient of T at interior cell (i, j, k) of the block
-    ! (central differences; the ghost layers next to the interior are filled)
-    function grad_cell(i, j, k) result(g)
-      integer, intent(in) :: i, j, k
-      real(dp) :: g(3)
-      associate (Y2 => Metric_DB(2, ib)%X_I, Y3 => Metric_DB(3, ib)%X_I)
-        g(1) = (T_A(i+1, j, k) - T_A(i-1, j, k))/(r_c(i+1) - r_c(i-1))
-        g(2) = (T_A(i, j+1, k) - T_A(i, j-1, k))/(r_c(i)*(Y2(j+1) - Y2(j-1)))
-        g(3) = (T_A(i, j, k+1) - T_A(i, j, k-1))/(r_c(i)*sin(Y2(j))*(Y3(k+1) - Y3(k-1)))
-      end associate
-    end function grad_cell
+  ! Does block ib have atmosphere work (atm_block's own test)?
+  logical function atm_active(ib)
+    integer, intent(in) :: ib
+    integer :: m
+    m = nb(1)
+    atm_active = .not. (maxval(atm_switch(z_c(1:m))) < 1.0e-8_dp .and. atm_switch(r_f(m) - r_top_cz) < 1.0e-8_dp)
+  end function atm_active
 
-    ! The gradient that drives the face flux along direction d at height zf
-    ! [cm] (cond_along_b): (<b b> g)_d with the unresolved vertical field of
-    ! rms dB_r(z) and the isotropic part b_iso_G,
-    !   <b b> = (B B + dB_r^2 e_r e_r + b_iso^2 I)/(B^2 + dB_r^2 + b_iso^2)
-    ! dB_r(z) = cond_dB0_G (1 - tanh((z - cond_dB_zj_km)/cond_dB_w_km))/2
-    ! (0 when cond_dB0_G = 0: then w b_d (b.g) + (1 - w) g_d, w = B^2/(B^2 + b_iso^2))
-    real(dp) function along_b(g, bv, d, zf) result(gd)
-      real(dp), intent(in) :: g(3), bv(3), zf
-      integer, intent(in) :: d
-      real(dp) :: db2, dn
-      db2 = 0.0_dp
-      if (cond_dB0_G > 0.0_dp) &
-          db2 = (cond_dB0_G*0.5_dp*(1.0_dp - tanh((zf - cond_dB_zj_km*1.0e5_dp)/(cond_dB_w_km*1.0e5_dp))))**2
-      dn = sum(bv**2) + db2 + b_iso_G**2
-      gd = (bv(d)*dot_product(bv, g) + b_iso_G**2*g(d))/dn
-      if (d == 1) gd = gd + db2*g(1)/dn
-    end function along_b
-
-    ! CZTR's hyperbolic face flux: target -fsat k0 T^2.5 dT/dx, relaxed;
-    ! fS: the Spitzer weight, qcl: the collisionless flux (weight 1 - fS)
-    subroutine face_flux(Sf, Tf, rf, csf, cvf, Tg, dx, vf, q, fS, qcl)
-      real(dp), intent(in) :: Sf, Tf, rf, csf, cvf, Tg, dx, vf, fS, qcl
-      real(dp), intent(inout) :: q
-      real(dp) :: k0, Fc, qt, D, budget, tau
-      k0 = Sf*(kappa0_spitzer/trac_f(Tf) + blend_weight(Tf, T_SWITCH, T_SWITCH_WIDTH)*extra_h_kappa0(hcond_tab, log10(Tf)))
-      Fc = k0*Tf**2.5_dp*Tg
-      qt = -Fc/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
-      qt = fS*qt + (1.0_dp - fS)*Sf*qcl
-      D = fS*k0*Tf**2.5_dp/(rf*cvf)
-      ! (cond_tau_fsat: the saturation factor also in tau, Rempel 2017 eq. 16 with
-      ! f_sat: lower tau where the flux saturates, the flux follows its target)
-      if (cond_tau_fsat) D = D/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
-      budget = max(f_cfl_cond*dx/dt - vf, 1.0e-3_dp*dx/dt)
-      tau = max(D/budget**2, 4.0_dp*dt)
-      q = qt + (q - qt)*exp(-dt/tau)
-    end subroutine face_flux
-  end subroutine atm_block
+  ! |B| for the field-strength heating, saturated at H_B_sat_G (> 0)
+  real(dp) function bsat(b)
+    real(dp), intent(in) :: b
+    bsat = b
+    if (H_B_sat_G > 0.0_dp) bsat = min(b, H_B_sat_G)
+  end function bsat
 
   ! Floors of block ib (interior cells): rho >= rho_floor; T >= T_floor where S > 0.5.
   ! T by the EOS's column evaluator (ln T only; the same values as eos_eval)

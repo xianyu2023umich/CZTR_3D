@@ -28,7 +28,7 @@ module cz3d_app_mod
   use cz3d_bg_mod, only: k_join, n_r, n_c, bg_view, r_c, r_f, drdxi_c, rho0, s0, p0, lnp0, g_c, z_c, ds0dr, rho1_init, s1_init, &
       v_init, tab, area_f, xi, T0, ddr_c, cs0, vol_c, r_top_cz
   use cz3d_transport_mod, only: transport_column, grey_atm_column, cool_f, cool_c, grey_i0, tr_view, col_bottom, col_top
-  use cztr3d_atm_mod, only: atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce, atm_switch, trac_f
+  use cztr3d_atm_mod, only: atm_losses, states_interior, atm_active, atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce, atm_switch, trac_f
   use eos_types, only: eos_state
   use eos_thermo, only: eos_get_from_rho_T
   use const_mod, only: Lsun
@@ -140,7 +140,7 @@ module cz3d_app_mod
       T_AFTER = 9, T_D_ETA = 10, T_D_EOS = 11, T_D_FA = 12, T_D_FB = 13, T_D_FR = 14, T_D_FE = 15, T_D_DIV = 16, &
       T_D_UPD = 17, T_D_IMP = 18, T_D_PRE = 19, T_D_SIP = 20, T_R_EOS = 21, T_R_MASS = 22, T_R_ADV = 23, &
       T_R_PRS = 24, T_R_MCURL = 25, T_R_MLOOP = 26, T_R_UPD = 27, T_R_SIC = 28, T_G_RK = 29, T_G_ATM = 30, &
-      T_G_DIF = 31, T_G_JOIN = 32, T_G_TR = 33, T_G_ETA = 34, T_R_OVL = 35, n_tim = 35
+      T_G_DIF = 31, T_G_JOIN = 32, T_G_TR = 33, T_G_ETA = 34, T_R_OVL = 35, T_A_OVL = 36, n_tim = 36
   character(len=24), parameter :: tim_name(n_tim) = [character(len=24) :: 'advance (total)', &
       '  ghost fill + join', '  rhs + RK update', '  radial implicit solves', '  energy transport', &
       '  atmosphere', '  diffusion', 'stable_dt (local)', 'after_step (outputs)', &
@@ -150,7 +150,7 @@ module cz3d_app_mod
       '    EOS (derived, p1)', '    mass flux div', '    advection (4 vars)', '    pressure, curvature', &
       '    MHD: curls, div B', '    MHD: Lorentz, psi', '    RK update', '    si_coeff', &
       '    fill: 4 RK stages', '    fill: atmosphere', '    fill: diffusion', '    join_bc (all)', &
-      '    fill: transport', '    fill: eta', '    during the fill: EOS']
+      '    fill: transport', '    fill: eta', '    during the fill: EOS', '    during the fill: losses']
   real(dp) :: tim_acc(n_tim) = 0.0_dp, tim_t0(n_tim) = 0.0_dp
   ! the dt report (cz_log): per constraint (1 CFL sum, 2 wave cap, 3 losses)
   ! this step's smallest dt on this rank and its cell: (c, 1) dt, 2 global
@@ -1065,7 +1065,7 @@ contains
     integer, intent(in) :: iBlocks(:)
     real(dp), intent(in) :: t, dt
     integer :: stage, jb, ib, i, j, k, v
-    logical :: overlap
+    logical :: overlap, atm_ovl
     real(dp) :: cdt, wdamp, fdamp
     real(dp), parameter :: c_stage(4) = [0.0_dp, 0.25_dp, 1.0_dp/3.0_dp, 0.5_dp]
     call tic(T_ADV)
@@ -1116,7 +1116,7 @@ contains
       end do
       call cz_unbind()
     end if
-    overlap = mr_levels == 0                         ! (multirate: begin interpolates sources in time)
+    overlap = overlap_fills .and. mr_levels == 0     ! (multirate: begin interpolates sources in time)
     if (overlap) then
       if (.not. allocated(p1_IB)) allocate(p1_IB(nb(1), nb(2), nb(3), size(State_GVB, 5)))
       if (size(p1_IB, 4) /= size(State_GVB, 5)) then
@@ -1255,7 +1255,33 @@ contains
       call tic(T_G_ATM)
       ! (not psi: the atmosphere physics does not read it, and the diffusion's
       ! fill refreshes every variable before anything else does)
-      call arbor_fill_ghosts(State_GVB, iVarMax=merge(psi_ - 1, nv, use_B), n_ghost=2, faces_only=.true., time=t + dt)
+      atm_ovl = overlap .and. si_cols .and. (use_losses .or. use_heating)
+      if (atm_ovl) then
+        call arbor_fill_ghosts_begin(State_GVB, iVarMax=merge(psi_ - 1, nv, use_B), n_ghost=2, faces_only=.true., &
+            time=t + dt)
+        call toc(T_G_ATM)
+        call toc(T_GHOST)
+        ! while the messages travel: the losses and heating (per cell, the
+        ! state before the conduction; the radial ghosts they read are this
+        ! rank's, filled by begin)
+        call tic(T_A_OVL)
+        do jb = 1, size(iBlocks)
+          ib = iBlocks(jb)
+          if (skip_frozen(ib)) cycle
+          call cz_bind(ib)
+          if (.not. atm_active(ib)) cycle
+          call states_interior(ib)
+          call atm_losses(ib, at_top)
+          call mpi_progress()
+        end do
+        call cz_unbind()
+        call toc(T_A_OVL)
+        call tic(T_GHOST)
+        call tic(T_G_ATM)
+        call arbor_fill_ghosts_end(State_GVB)
+      else
+        call arbor_fill_ghosts(State_GVB, iVarMax=merge(psi_ - 1, nv, use_B), n_ghost=2, faces_only=.true., time=t + dt)
+      end if
       call toc(T_G_ATM)
       call tic(T_G_JOIN)
       call join_bc()
@@ -1265,7 +1291,7 @@ contains
       do jb = 1, size(iBlocks)
         if (skip_frozen(iBlocks(jb))) cycle
         call cz_bind(iBlocks(jb))
-        call atm_block(iBlocks(jb), dt, at_bottom, at_top, shell_steps())
+        call atm_block(iBlocks(jb), dt, at_bottom, at_top, shell_steps(), losses_ready=atm_ovl)
       end do
       call cz_unbind()
       call toc(T_ATM)
