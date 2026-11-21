@@ -54,6 +54,7 @@ module cztr3d_atm_mod
   real(dp), allocatable :: F1(:,:,:,:), F2(:,:,:,:), F3(:,:,:,:), Dv(:,:,:,:)
 
   integer :: tm_st = 0, tm_co = 0, tm_lo = 0     ! (ARBOR timers of atm_block's parts)
+  real(dp), parameter :: exp_m025 = exp(-0.25_dp) ! (face_flux: the relaxation factor at tau = 4 dt)
   ! the interior columns' states (with radial ghosts) per block, from states_interior:
   ! (0:nb(1)+1, j, k, 1 rho 2 T 3 cv 4 ne 5 p 6 cs, block)
   real(dp), allocatable :: stI_B(:,:,:,:,:)
@@ -148,6 +149,11 @@ contains
     real(dp), intent(in) :: stf(0:)
     logical, intent(in), optional :: losses_ready   ! Qloss_B, Qheat_B already this state's (atm_losses), states stored
     logical :: ready
+    ! per block: the switch at the radial faces (sfr) and the cells (scc), the
+    ! unresolved field's dB_r^2 there (dbf, dbc), sin theta (sth_j), and each
+    ! interior cell's T gradient (gc), once instead of per face
+    real(dp) :: sfr(0:nb(1)), scc(1:nb(1)), dbf(0:nb(1)), dbc(1:nb(1)), sth_j(1:nb(2)), &
+        gc(3, nb(1), nb(2), nb(3))
     real(dp) :: Tf, rf, Tg, csf, cvf, dxf, vf, x, dQ, Sc, Sf, sth, dt, fS, qcl, gt(3), bf(3), aniso
     real(dp) :: colH(nb(1)), dr, qd, ionH, lT, w, nHt, QH, iH, QCa, iCa, QMg, iMg, chromo, coron, Qheat, Qlos, colm
     integer :: i, j, k, m
@@ -171,11 +177,31 @@ contains
     associate (X2 => Metric_DB(2, ib)%X_I, X3 => Metric_DB(3, ib)%X_I)
     if (use_conduction) then
       F1 = 0.0_dp;  F2 = 0.0_dp;  F3 = 0.0_dp
+      do i = 0, m
+        sfr(i) = atm_switch(r_f(i) - r_top_cz)
+        dbf(i) = db2_at(r_f(i) - r_top_cz)
+      end do
+      do i = 1, m
+        scc(i) = atm_switch(z_c(i))
+        dbc(i) = db2_at(z_c(i))
+      end do
+      do j = 1, nb(2)
+        sth_j(j) = sin(X2(j))
+      end do
+      if (aniso > 0.0_dp) then
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            do i = 1, m
+              gc(:, i, j, k) = grad_cell(i, j, k)
+            end do
+          end do
+        end do
+      end if
       do k = 1, nb(3)
         do j = 1, nb(2)
           ! radial faces 0..m (none through the domain's bottom and top walls)
           do i = 0, m
-            Sf = atm_switch(r_f(i) - r_top_cz)
+            Sf = sfr(i)
             if (Sf < 1.0e-8_dp .or. (i == 0 .and. at_bot) .or. (i == m .and. at_top)) then
               qr_B(i, j, k, ib) = 0.0_dp
               ! an outflow top: the top cell passes the conductive energy on
@@ -197,11 +223,11 @@ contains
               ! along the field: the face's (r, theta, phi) gradient (tangential
               ! parts from its interior cells' central differences)
               gt = 0.0_dp;  x = 0.0_dp
-              if (i >= 1) then;  gt = gt + grad_cell(i, j, k);  x = x + 1.0_dp;  end if
-              if (i + 1 <= m) then;  gt = gt + grad_cell(i+1, j, k);  x = x + 1.0_dp;  end if
+              if (i >= 1) then;  gt = gt + gc(:, i, j, k);  x = x + 1.0_dp;  end if
+              if (i + 1 <= m) then;  gt = gt + gc(:, i+1, j, k);  x = x + 1.0_dp;  end if
               gt = gt/max(x, 1.0_dp);  gt(1) = Tg
               bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i+1, j, k, BR:BP, ib))
-              Tg = along_b(gt, bf, 1, r_f(i) - r_top_cz)
+              Tg = along_b(gt, bf, 1, dbf(i))
             end if
             vf = 0.5_dp*abs(State_GVB(i, j, k, VR, ib) + State_GVB(i+1, j, k, VR, ib))
             fS = 1.0_dp;  qcl = 0.0_dp
@@ -219,7 +245,7 @@ contains
         do j = 0, nb(2)
           dxf = X2(j+1) - X2(j)
           do i = 1, m
-            Sc = atm_switch(z_c(i))
+            Sc = scc(i)
             if (Sc < 1.0e-8_dp) then
               qt_B(i, j, k, ib) = 0.0_dp
               cycle
@@ -232,11 +258,11 @@ contains
             Tg = (T_A(i, j+1, k) - T_A(i, j, k))/(r_c(i)*dxf)
             if (aniso > 0.0_dp) then
               gt = 0.0_dp;  x = 0.0_dp
-              if (j >= 1) then;  gt = gt + grad_cell(i, j, k);  x = x + 1.0_dp;  end if
-              if (j + 1 <= nb(2)) then;  gt = gt + grad_cell(i, j+1, k);  x = x + 1.0_dp;  end if
+              if (j >= 1) then;  gt = gt + gc(:, i, j, k);  x = x + 1.0_dp;  end if
+              if (j + 1 <= nb(2)) then;  gt = gt + gc(:, i, j+1, k);  x = x + 1.0_dp;  end if
               gt = gt/max(x, 1.0_dp);  gt(2) = Tg
               bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i, j+1, k, BR:BP, ib))
-              Tg = along_b(gt, bf, 2, z_c(i))
+              Tg = along_b(gt, bf, 2, dbc(i))
             end if
             vf = 0.5_dp*abs(State_GVB(i, j, k, VT, ib) + State_GVB(i, j+1, k, VT, ib))
             fS = 1.0_dp
@@ -250,9 +276,9 @@ contains
       do k = 0, nb(3)
         dxf = X3(k+1) - X3(k)
         do j = 1, nb(2)
-          sth = sin(X2(j))
+          sth = sth_j(j)
           do i = 1, m
-            Sc = atm_switch(z_c(i))
+            Sc = scc(i)
             if (Sc < 1.0e-8_dp) then
               qp_B(i, j, k, ib) = 0.0_dp
               cycle
@@ -265,11 +291,11 @@ contains
             Tg = (T_A(i, j, k+1) - T_A(i, j, k))/(r_c(i)*sth*dxf)
             if (aniso > 0.0_dp) then
               gt = 0.0_dp;  x = 0.0_dp
-              if (k >= 1) then;  gt = gt + grad_cell(i, j, k);  x = x + 1.0_dp;  end if
-              if (k + 1 <= nb(3)) then;  gt = gt + grad_cell(i, j, k+1);  x = x + 1.0_dp;  end if
+              if (k >= 1) then;  gt = gt + gc(:, i, j, k);  x = x + 1.0_dp;  end if
+              if (k + 1 <= nb(3)) then;  gt = gt + gc(:, i, j, k+1);  x = x + 1.0_dp;  end if
               gt = gt/max(x, 1.0_dp);  gt(3) = Tg
               bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i, j, k+1, BR:BP, ib))
-              Tg = along_b(gt, bf, 3, z_c(i))
+              Tg = along_b(gt, bf, 3, dbc(i))
             end if
             vf = 0.5_dp*abs(State_GVB(i, j, k, VP, ib) + State_GVB(i, j, k+1, VP, ib))
             fS = 1.0_dp
@@ -328,35 +354,58 @@ contains
     !   <b b> = (B B + dB_r^2 e_r e_r + b_iso^2 I)/(B^2 + dB_r^2 + b_iso^2)
     ! dB_r(z) = cond_dB0_G (1 - tanh((z - cond_dB_zj_km)/cond_dB_w_km))/2
     ! (0 when cond_dB0_G = 0: then w b_d (b.g) + (1 - w) g_d, w = B^2/(B^2 + b_iso^2))
-    real(dp) function along_b(g, bv, d, zf) result(gd)
-      real(dp), intent(in) :: g(3), bv(3), zf
+    ! (db2: dB_r^2 at the face's height, db2_at)
+    real(dp) function along_b(g, bv, d, db2) result(gd)
+      real(dp), intent(in) :: g(3), bv(3), db2
       integer, intent(in) :: d
-      real(dp) :: db2, dn
-      db2 = 0.0_dp
-      if (cond_dB0_G > 0.0_dp) &
-          db2 = (cond_dB0_G*0.5_dp*(1.0_dp - tanh((zf - cond_dB_zj_km*1.0e5_dp)/(cond_dB_w_km*1.0e5_dp))))**2
+      real(dp) :: dn
       dn = sum(bv**2) + db2 + b_iso_G**2
       gd = (bv(d)*dot_product(bv, g) + b_iso_G**2*g(d))/dn
       if (d == 1) gd = gd + db2*g(1)/dn
     end function along_b
+
+    ! dB_r(z)^2 of along_b at height zf [cm]
+    real(dp) function db2_at(zf) result(db2)
+      real(dp), intent(in) :: zf
+      db2 = 0.0_dp
+      if (cond_dB0_G > 0.0_dp) &
+          db2 = (cond_dB0_G*0.5_dp*(1.0_dp - tanh((zf - cond_dB_zj_km*1.0e5_dp)/(cond_dB_w_km*1.0e5_dp))))**2
+    end function db2_at
 
     ! CZTR's hyperbolic face flux: target -fsat k0 T^2.5 dT/dx, relaxed;
     ! fS: the Spitzer weight, qcl: the collisionless flux (weight 1 - fS)
     subroutine face_flux(Sf, Tf, rf, csf, cvf, Tg, dx, vf, q, fS, qcl)
       real(dp), intent(in) :: Sf, Tf, rf, csf, cvf, Tg, dx, vf, fS, qcl
       real(dp), intent(inout) :: q
-      real(dp) :: k0, Fc, qt, D, budget, tau
-      k0 = Sf*(kappa0_spitzer/trac_f(Tf) + blend_weight(Tf, T_SWITCH, T_SWITCH_WIDTH)*extra_h_kappa0(hcond_tab, log10(Tf)))
-      Fc = k0*Tf**2.5_dp*Tg
+      real(dp) :: k0, Fc, qt, D, budget, tau, t25, wb
+      ! (the neutral-H term only where its blend weight is nonzero: 0 x it is 0;
+      ! the weight 0.5 (1 - tanh(x)) is exactly 0 for x > 19.1 in double precision)
+      if ((Tf - T_SWITCH)/T_SWITCH_WIDTH > 20.0_dp) then
+        wb = 0.0_dp
+      else
+        wb = blend_weight(Tf, T_SWITCH, T_SWITCH_WIDTH)
+      end if
+      if (wb > 0.0_dp) then
+        k0 = Sf*(kappa0_spitzer/trac_f(Tf) + wb*extra_h_kappa0(hcond_tab, log10(Tf)))
+      else
+        k0 = Sf*(kappa0_spitzer/trac_f(Tf) + 0.0_dp)
+      end if
+      t25 = Tf**2.5_dp
+      Fc = k0*t25*Tg
       qt = -Fc/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
       qt = fS*qt + (1.0_dp - fS)*Sf*qcl
-      D = fS*k0*Tf**2.5_dp/(rf*cvf)
+      D = fS*k0*t25/(rf*cvf)
       ! (cond_tau_fsat: the saturation factor also in tau, Rempel 2017 eq. 16 with
       ! f_sat: lower tau where the flux saturates, the flux follows its target)
       if (cond_tau_fsat) D = D/(1.0_dp + abs(Fc)/(1.5_dp*rf*csf**3))
       budget = max(f_cfl_cond*dx/dt - vf, 1.0e-3_dp*dx/dt)
       tau = max(D/budget**2, 4.0_dp*dt)
-      q = qt + (q - qt)*exp(-dt/tau)
+      ! (at tau's floor 4 dt, dt/tau is exactly 0.25)
+      if (tau == 4.0_dp*dt) then
+        q = qt + (q - qt)*exp_m025
+      else
+        q = qt + (q - qt)*exp(-dt/tau)
+      end if
     end subroutine face_flux
   end subroutine atm_block
 
