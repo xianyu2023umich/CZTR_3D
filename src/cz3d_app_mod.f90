@@ -541,17 +541,22 @@ contains
   ! radial column at a time (eos_hhe's column evaluators: vectorized loops,
   ! the same values as the scalar calls). cs_only (with with_cs): rho and the
   ! sound speed only (p1_G, T_G not set; ln T not evaluated).
-  subroutine derived(ib, with_cs, cs_only)
+  subroutine derived(ib, with_cs, cs_only, faces1)
     integer, intent(in) :: ib
     logical, intent(in) :: with_cs
     logical, intent(in), optional :: cs_only
+    ! faces1: the EOS fields (p1_G, cs_G, T_G) only on the interior and one
+    ! ghost layer across each face (no edges, corners or second layer: what
+    ! the diffusion's face stencils read); rho_G everywhere
+    logical, intent(in), optional :: faces1
     real(dp) :: rp(1-ng:nb(1)+ng), s(1-ng:nb(1)+ng), q(1-ng:nb(1)+ng, 3), d(1-ng:nb(1)+ng), &
         e1(1-ng:nb(1)+ng), e2(1-ng:nb(1)+ng), e3(1-ng:nb(1)+ng)
-    integer :: i, j, k, n
-    logical :: cso
+    integer :: i, j, k, n, i0, i1
+    logical :: cso, f1, jin, kin
     cso = .false.
     if (present(cs_only)) cso = cs_only .and. with_cs
-    n = nb(1) + 2*ng
+    f1 = .false.
+    if (present(faces1)) f1 = faces1
     do k = 1 - ng, nb(3) + ng
       do j = 1 - ng, nb(2) + ng
         do i = 1 - ng, nb(1) + ng
@@ -559,42 +564,55 @@ contains
           rp(i) = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)                     ! physical density
           s(i) = s0(i) + State_GVB(i, j, k, s1_, ib)
         end do
+        i0 = 1 - ng;  i1 = nb(1) + ng
+        if (f1) then
+          jin = j >= 1 .and. j <= nb(2)
+          kin = k >= 1 .and. k <= nb(3)
+          if (jin .and. kin) then                     ! interior column: its radial face ghosts too
+            i0 = 0;  i1 = nb(1) + 1
+          else if ((jin .and. (k == 0 .or. k == nb(3) + 1)) .or. (kin .and. (j == 0 .or. j == nb(2) + 1))) then
+            i0 = 1;  i1 = nb(1)                       ! a horizontal face ghost column
+          else
+            cycle
+          end if
+        end if
+        n = i1 - i0 + 1
         if (cso) then
           ! the sound speed only (q(:, 1) ln p, q(:, 2) Gamma1)
-          call eos_fields_n(tab, [F_LNP, F_GAMMA1], n, rp, s, q(:, 1:2))
-          call vexp(n, q(:, 1), e2)
-          do i = 1 - ng, nb(1) + ng
+          call eos_fields_n(tab, [F_LNP, F_GAMMA1], n, rp(i0:i1), s(i0:i1), q(i0:i1, 1:2))
+          call vexp(n, q(i0:i1, 1), e2(i0:i1))
+          do i = i0, i1
             cs_G(i, j, k) = sqrt(q(i, 2)*e2(i)/rp(i))/xi(i)                        ! reduced (RSST)
           end do
           if (use_B) then
-            do i = 1 - ng, nb(1) + ng
+            do i = i0, i1
               cs_G(i, j, k) = cs_G(i, j, k) + va_eff(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rp(i), &
                   cell_cap(i, j, k, ib, cs_G(i, j, k)))
             end do
           end if
         else if (with_cs) then
-          call eos_fields_n(tab, [F_LNP, F_LNT, F_GAMMA1], n, rp, s, q)
-          d = q(:, 1) - lnp0(1-ng:nb(1)+ng)
-          call vexpm1(n, d, e1)
-          call vexp(n, q(:, 1), e2)
-          call vexp(n, q(:, 2), e3)
-          do i = 1 - ng, nb(1) + ng
+          call eos_fields_n(tab, [F_LNP, F_LNT, F_GAMMA1], n, rp(i0:i1), s(i0:i1), q(i0:i1, :))
+          d(i0:i1) = q(i0:i1, 1) - lnp0(i0:i1)
+          call vexpm1(n, d(i0:i1), e1(i0:i1))
+          call vexp(n, q(i0:i1, 1), e2(i0:i1))
+          call vexp(n, q(i0:i1, 2), e3(i0:i1))
+          do i = i0, i1
             p1_G(i, j, k) = p0(i)*e1(i)
             cs_G(i, j, k) = sqrt(q(i, 3)*e2(i)/rp(i))/xi(i)                        ! reduced (RSST)
             T_G(i, j, k) = e3(i)
           end do
           ! with B: the fast speed's bound c_red + v_A (the diffusion's speed; v_A capped, see va_eff)
           if (use_B) then
-            do i = 1 - ng, nb(1) + ng
+            do i = i0, i1
               cs_G(i, j, k) = cs_G(i, j, k) + va_eff(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rp(i), &
                   cell_cap(i, j, k, ib, cs_G(i, j, k)))
             end do
           end if
         else
-          call eos_field_n(tab, F_LNP, n, rp, s, q(:, 1))
-          d = q(:, 1) - lnp0(1-ng:nb(1)+ng)
-          call vexpm1(n, d, e1)
-          do i = 1 - ng, nb(1) + ng
+          call eos_field_n(tab, F_LNP, n, rp(i0:i1), s(i0:i1), q(i0:i1, 1))
+          d(i0:i1) = q(i0:i1, 1) - lnp0(i0:i1)
+          call vexpm1(n, d(i0:i1), e1(i0:i1))
+          do i = i0, i1
             p1_G(i, j, k) = p0(i)*e1(i)
           end do
         end if
@@ -802,7 +820,7 @@ contains
     real(dp), intent(in) :: dt
     integer :: c, q, i, j, k, m, nk, n, g, ib, v, jb
     real(dp), allocatable :: a(:), b(:), cc(:), d(:), et(:), kf(:), xg(:), de(:,:,:,:)
-    real(dp) :: vol, w, rf
+    real(dp) :: vol, w, rf, rpw(nb(1)), sw(nb(1)), ltw(nb(1)), tw(nb(1))
     logical :: heat
     nk = n_r/nb(1)
     m = n_r
@@ -879,12 +897,19 @@ contains
         ib = iBlocks(jb)
         if (use_atmosphere .and. Key_IB(KI+1, ib)*nb(1) >= k_join) cycle
         call cz_bind(ib)
-        call derived(ib, .true.)
+        ! T of the cells (the column EOS evaluator, ln T only: the values derived gives)
+        n = merge(min(nb(1), k_join - r_off), nb(1), use_atmosphere)
         do k = 1, nb(3)
           do j = 1, nb(2)
-            do i = 1, merge(min(nb(1), k_join - r_off), nb(1), use_atmosphere)
+            do i = 1, n
+              rpw(i) = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+              sw(i) = s0(i) + State_GVB(i, j, k, s1_, ib)
+            end do
+            call eos_field_n(tab, F_LNT, n, rpw(1:n), sw(1:n), ltw(1:n))
+            call vexp(n, ltw(1:n), tw(1:n))
+            do i = 1, n
               State_GVB(i, j, k, s1_, ib) = State_GVB(i, j, k, s1_, ib) &
-                  - de(i, j, k, ib)/(2.0_dp*four_pi*rho_G(i, j, k)*T_G(i, j, k))
+                  - de(i, j, k, ib)/(2.0_dp*four_pi*(rho0(i) + State_GVB(i, j, k, rho1_, ib))*tw(i))
             end do
           end do
         end do
@@ -1104,19 +1129,11 @@ contains
         call budget_hydro(iBlocks(jb), dt)
       end do
     end if
-    if (use_atmosphere) then
-      do jb = 1, size(iBlocks)
-        if (skip_frozen(iBlocks(jb))) cycle
-        call cz_bind(iBlocks(jb))
-        call atm_floors(iBlocks(jb))
-      end do
-      call cz_unbind()
-    end if
     call tic(T_TRANS)
     call cz_transport_all(iBlocks, dt, .false., t + dt)
     call toc(T_TRANS)
     if (use_atmosphere) then
-      ! conduction (the ghosts in every direction), losses, heating, then the floors
+      ! conduction (the ghosts in every direction), losses, heating
       call tic(T_GHOST)
       call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + dt)
       call join_bc()
@@ -1126,7 +1143,6 @@ contains
         if (skip_frozen(iBlocks(jb))) cycle
         call cz_bind(iBlocks(jb))
         call atm_block(iBlocks(jb), dt, at_bottom, at_top, shell_steps())
-        call atm_floors(iBlocks(jb))
       end do
       call cz_unbind()
       call toc(T_ATM)
@@ -1152,7 +1168,6 @@ contains
         if (skip_frozen(iBlocks(jb))) cycle
         call cz_bind(iBlocks(jb))
         call diffusion(iBlocks(jb), dt)
-        if (use_atmosphere) call atm_floors(iBlocks(jb))
       end do
       call cz_unbind()
       call tic(T_D_IMP)
@@ -1173,6 +1188,16 @@ contains
       end if
       call toc(T_D_SIP)
       call toc(T_DIFF)
+    end if
+    ! the atmosphere's floors (rho_floor; T_floor where atm_switch > 0.5), once
+    ! per step after all the operators (the floors report counts their action)
+    if (use_atmosphere) then
+      do jb = 1, size(iBlocks)
+        if (skip_frozen(iBlocks(jb))) cycle
+        call cz_bind(iBlocks(jb))
+        call atm_floors(iBlocks(jb))
+      end do
+      call cz_unbind()
     end if
     ! freeze_cz (modes line_tied, all): the CZ cells back to their stored state
     if (freeze_side == 'cz' .and. freeze_cz_mode /= 'ghost') then
@@ -2016,7 +2041,7 @@ contains
     real(dp) :: vol, outflow, rho_new, a1, a2, a3, ho, s1o, ke_o, dE_act, dti, kh_o, eb_o
     ! sin theta at the cell centres (snt) and at the theta faces between them (snf: face j between j and j+1)
     real(dp) :: snt(0:nb(2)+1), snf(0:nb(2))
-    logical :: blend_r, blend_h, b_resist
+    logical :: blend_r, blend_h, b_resist, b_j4
     call tic(T_D_PRE)
     ! the top-layer blend weights at the radial faces (wr) and the cells (wh: horizontal faces)
     wr = 0.0_dp;  wh = 0.0_dp
@@ -2031,6 +2056,7 @@ contains
     blend_r = diff_top_km > 0.0_dp .and. any(wr /= 0.0_dp)
     blend_h = diff_top_km > 0.0_dp .and. any(wh /= 0.0_dp)
     b_resist = use_B .and. b_diff_form == 'resistive'
+    b_j4 = b_diffusion_h < 0.0_dp .and. b_diff_limiter == 'minmod'
     if (b_resist) then
       associate (th => Metric_DB(2, ib)%X_I)
         do j = 0, nb(2) + 1
@@ -2046,7 +2072,7 @@ contains
     call toc(T_D_PRE)
     call tic(T_D_EOS)
     ! (above the join T and p1 are not used: no energy flux, no heating there; the budget needs them)
-    call derived(ib, .true., cs_only=in_atm .and. .not. budget_on)
+    call derived(ib, .true., cs_only=in_atm .and. .not. budget_on, faces1=.true.)
     call toc(T_D_EOS)
     call tic(T_D_FA)
     associate (m1 => Metric_DB(1, ib), m2 => Metric_DB(2, ib), m3 => Metric_DB(3, ib))
@@ -2085,11 +2111,19 @@ contains
     if (diffusion_heating .and. .not. in_atm) then
       ! the energy each face's fluxes carry (variable 6), with h + Phi per cell
       ! (CZ blocks; above the join none, see below)
-      do k = 1 - ng, nb(3) + ng
-        do j = 1 - ng, nb(2) + ng
-          do i = 1 - ng, nb(1) + ng
-            hP_G(i, j, k) = h0_r(i) + T_G(i, j, k)*State_GVB(i, j, k, s1_, ib) + p1_G(i, j, k)/rho_G(i, j, k) + phi_r(i)
-          end do
+      ! (on the cells derived's faces1 evaluates: the interior and one layer across each face)
+      do k = 0, nb(3) + 1
+        do j = 0, nb(2) + 1
+          if ((j == 0 .or. j == nb(2) + 1) .and. (k == 0 .or. k == nb(3) + 1)) cycle
+          if (j >= 1 .and. j <= nb(2) .and. k >= 1 .and. k <= nb(3)) then
+            do i = 0, nb(1) + 1
+              hP_G(i, j, k) = h0_r(i) + T_G(i, j, k)*State_GVB(i, j, k, s1_, ib) + p1_G(i, j, k)/rho_G(i, j, k) + phi_r(i)
+            end do
+          else
+            do i = 1, nb(1)
+              hP_G(i, j, k) = h0_r(i) + T_G(i, j, k)*State_GVB(i, j, k, s1_, ib) + p1_G(i, j, k)/rho_G(i, j, k) + phi_r(i)
+            end do
+          end if
         end do
       end do
       call faces_e(1, 0, 0, F1_FV)
@@ -2346,6 +2380,17 @@ contains
             cycle
           end if
           call bfaces(di + 2*dj + 3*dk, v - br_ + 1, F(:, :, :, v))
+        else if (b_j4) then
+          ! (jump4b with b_diffusion_h < 0 and the minmod limiter is jump4: a loop that vectorizes)
+          do k = 1 - dk, nb(3)
+            do j = 1 - dj, nb(2)
+              do i = 1 - di, nb(1)
+                jq = jump4(State_GVB(i-di, j-dj, k-dk, v, ib), State_GVB(i, j, k, v, ib), &
+                    State_GVB(i+di, j+dj, k+dk, v, ib), State_GVB(i+2*di, j+2*dj, k+2*dk, v, ib))
+                F(i, j, k, v) = -b_diff_factor*C(i, j, k)*jq
+              end do
+            end do
+          end do
         else
           do k = 1 - dk, nb(3)
             do j = 1 - dj, nb(2)

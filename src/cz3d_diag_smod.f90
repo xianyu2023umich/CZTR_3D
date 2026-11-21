@@ -498,7 +498,7 @@ contains
 
   ! The floors' action over the run (atm_floors' counts): the fraction of the
   ! checked cell-calls that a floor changed, per height band of shells with any
-  ! (one line per band of consecutive shells; atm_floors runs 3 times per step)
+  ! (one line per band of consecutive shells; atm_floors runs once per step)
   subroutine floors_report()
     use cztr3d_atm_mod, only: floor_cnt
     real(dp), allocatable :: c(:,:)
