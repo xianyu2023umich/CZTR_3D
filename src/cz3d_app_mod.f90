@@ -139,7 +139,8 @@ module cz3d_app_mod
   integer, parameter :: T_ADV = 1, T_GHOST = 2, T_RHS = 3, T_SI = 4, T_TRANS = 5, T_ATM = 6, T_DIFF = 7, T_DT = 8, &
       T_AFTER = 9, T_D_ETA = 10, T_D_EOS = 11, T_D_FA = 12, T_D_FB = 13, T_D_FR = 14, T_D_FE = 15, T_D_DIV = 16, &
       T_D_UPD = 17, T_D_IMP = 18, T_D_PRE = 19, T_D_SIP = 20, T_R_EOS = 21, T_R_MASS = 22, T_R_ADV = 23, &
-      T_R_PRS = 24, T_R_MCURL = 25, T_R_MLOOP = 26, T_R_UPD = 27, T_R_SIC = 28, n_tim = 28
+      T_R_PRS = 24, T_R_MCURL = 25, T_R_MLOOP = 26, T_R_UPD = 27, T_R_SIC = 28, T_G_RK = 29, T_G_ATM = 30, &
+      T_G_DIF = 31, T_G_JOIN = 32, T_G_TR = 33, T_G_ETA = 34, T_R_OVL = 35, n_tim = 35
   character(len=24), parameter :: tim_name(n_tim) = [character(len=24) :: 'advance (total)', &
       '  ghost fill + join', '  rhs + RK update', '  radial implicit solves', '  energy transport', &
       '  atmosphere', '  diffusion', 'stable_dt (local)', 'after_step (outputs)', &
@@ -147,7 +148,9 @@ module cz3d_app_mod
       '    walls, radial E flux', '    energy flux (E)', '    flux divergence', '    cell update', &
       '    radial B implicit', '    weights, B derivatives', '    si_diff_precond', &
       '    EOS (derived, p1)', '    mass flux div', '    advection (4 vars)', '    pressure, curvature', &
-      '    MHD: curls, div B', '    MHD: Lorentz, psi', '    RK update', '    si_coeff']
+      '    MHD: curls, div B', '    MHD: Lorentz, psi', '    RK update', '    si_coeff', &
+      '    fill: 4 RK stages', '    fill: atmosphere', '    fill: diffusion', '    join_bc (all)', &
+      '    fill: transport', '    fill: eta', '    during the fill: EOS']
   real(dp) :: tim_acc(n_tim) = 0.0_dp, tim_t0(n_tim) = 0.0_dp
   ! the dt report (cz_log): per constraint (1 CFL sum, 2 wave cap, 3 losses)
   ! this step's smallest dt on this rank and its cell: (c, 1) dt, 2 global
@@ -187,6 +190,10 @@ module cz3d_app_mod
   ! of its theta cells, ghosts included (cell_cap's ingredients, once per bind)
   real(dp), allocatable :: sw_r(:), sn_t(:)
   logical :: glm_cfl = .false.                    ! glm_ch == 'cfl' (a flag for the cell loops)
+  ! derived's outputs (need: a sum of them) and cell sets
+  integer, parameter :: D_P1 = 1, D_CS = 2, D_T = 4
+  integer, parameter :: C_ALL = 1, C_FACES1 = 2, C_INTERIOR = 3, C_SHELL = 4
+  real(dp), allocatable :: p1_IB(:,:,:,:)        ! the RK stages' interior p1 per block, computed during the ghost fill
   logical :: eos_fresh = .false.                  ! si_coeff's derived(.true.) is this state's: rhs reuses rho_G, p1_G
   ! freeze_cz: each block's state at its first step (cells r_off + i <= k_join restored after every step)
   real(dp), allocatable :: frz_B(:,:,:,:,:)
@@ -549,31 +556,40 @@ contains
 
   ! ================================================================ equation of state
 
-  ! rho and p1 = p0 expm1(ln p - ln p0) on the whole block (ghosts included);
-  ! with_cs: also the sound speed and T. The equation of state is evaluated a
-  ! radial column at a time (eos_hhe's column evaluators: vectorized loops,
-  ! the same values as the scalar calls). cs_only (with with_cs): rho and the
-  ! sound speed only (p1_G, T_G not set; ln T not evaluated).
-  subroutine derived(ib, with_cs, cs_only, faces1, no_T)
-    integer, intent(in) :: ib
-    logical, intent(in) :: with_cs
-    logical, intent(in), optional :: cs_only
-    ! no_T (with with_cs): p1_G and cs_G, not T_G (ln T not evaluated)
-    logical, intent(in), optional :: no_T
-    ! faces1: the EOS fields (p1_G, cs_G, T_G) only on the interior and one
-    ! ghost layer across each face (no edges, corners or second layer: what
-    ! the diffusion's face stencils read); rho_G everywhere
-    logical, intent(in), optional :: faces1
+  ! The equation of state on block ib: rho_G (the inertia density rho0 + rho1)
+  ! on every cell, and the outputs in need (a sum of D_P1, D_CS, D_T) on the
+  ! cells of cells:
+  !   D_P1  p1_G = p0 expm1(ln p - ln p0)
+  !   D_CS  cs_G = sqrt(Gamma1 p/rho)/xi (+ the capped v_A with the field)
+  !   D_T   T_G
+  !   C_ALL      every cell, both ghost layers, edges and corners included
+  !   C_FACES1   the interior and one ghost layer across each face
+  !   C_INTERIOR the interior cells
+  !   C_SHELL    the ghost cells only (C_ALL less the interior)
+  ! Only the table fields the outputs need are interpolated (ln p for D_P1 or
+  ! D_CS, Gamma1 for D_CS, ln T for D_T), a radial segment of a column at a
+  ! time (eos_hhe's column evaluators: the same values as the scalar calls,
+  ! whatever the segment).
+  subroutine derived(ib, need, cells)
+    integer, intent(in) :: ib, need, cells
     real(dp) :: rp(1-ng:nb(1)+ng), s(1-ng:nb(1)+ng), q(1-ng:nb(1)+ng, 3), d(1-ng:nb(1)+ng), &
         e1(1-ng:nb(1)+ng), e2(1-ng:nb(1)+ng), e3(1-ng:nb(1)+ng)
-    integer :: i, j, k, n, i0, i1
-    logical :: cso, f1, jin, kin, nT
-    nT = .false.
-    if (present(no_T)) nT = no_T
-    cso = .false.
-    if (present(cs_only)) cso = cs_only .and. with_cs
-    f1 = .false.
-    if (present(faces1)) f1 = faces1
+    integer :: i, j, k, nf, ip, iT, ig, ids(3), seg(2, 2), ns, m
+    logical :: wp1, wcs, wT, jin, kin
+    wp1 = iand(need, D_P1) /= 0
+    wcs = iand(need, D_CS) /= 0
+    wT = iand(need, D_T) /= 0
+    ! the table fields and their columns in q
+    nf = 0;  ip = 0;  iT = 0;  ig = 0
+    if (wp1 .or. wcs) then
+      nf = nf + 1;  ids(nf) = F_LNP;  ip = nf
+    end if
+    if (wT) then
+      nf = nf + 1;  ids(nf) = F_LNT;  iT = nf
+    end if
+    if (wcs) then
+      nf = nf + 1;  ids(nf) = F_GAMMA1;  ig = nf
+    end if
     do k = 1 - ng, nb(3) + ng
       do j = 1 - ng, nb(2) + ng
         do i = 1 - ng, nb(1) + ng
@@ -581,72 +597,73 @@ contains
           rp(i) = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)                     ! physical density
           s(i) = s0(i) + State_GVB(i, j, k, s1_, ib)
         end do
-        i0 = 1 - ng;  i1 = nb(1) + ng
-        if (f1) then
-          jin = j >= 1 .and. j <= nb(2)
-          kin = k >= 1 .and. k <= nb(3)
+        if (nf == 0) cycle
+        ! the column's radial segments
+        jin = j >= 1 .and. j <= nb(2)
+        kin = k >= 1 .and. k <= nb(3)
+        ns = 1
+        select case (cells)
+        case (C_ALL)
+          seg(:, 1) = [1 - ng, nb(1) + ng]
+        case (C_FACES1)
           if (jin .and. kin) then                     ! interior column: its radial face ghosts too
-            i0 = 0;  i1 = nb(1) + 1
+            seg(:, 1) = [0, nb(1) + 1]
           else if ((jin .and. (k == 0 .or. k == nb(3) + 1)) .or. (kin .and. (j == 0 .or. j == nb(2) + 1))) then
-            i0 = 1;  i1 = nb(1)                       ! a horizontal face ghost column
+            seg(:, 1) = [1, nb(1)]                    ! a horizontal face ghost column
           else
             cycle
           end if
-        end if
-        n = i1 - i0 + 1
-        if (cso) then
-          ! the sound speed only (q(:, 1) ln p, q(:, 2) Gamma1)
-          call eos_fields_n(tab, [F_LNP, F_GAMMA1], n, rp(i0:i1), s(i0:i1), q(i0:i1, 1:2))
-          call vexp(n, q(i0:i1, 1), e2(i0:i1))
-          do i = i0, i1
-            cs_G(i, j, k) = sqrt(q(i, 2)*e2(i)/rp(i))/xi(i)                        ! reduced (RSST)
-          end do
-          if (use_B) then
-!GCC$ ivdep
-!DIR$ IVDEP
-            do i = i0, i1
-              cs_G(i, j, k) = cs_G(i, j, k) + va_cap(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rp(i), cs_G(i, j, k), &
-                  norm2(State_GVB(i, j, k, vr_:vp_, ib)), min(drdxi_c(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), &
-                  r_c(i)*sn_t(j)*Metric_DB(3, ib)%Dx_I(k)), sw_r(i))
-            end do
-          end if
-        else if (with_cs) then
-          if (nT) then
-            ! (ln p and Gamma1 only: q(:, 3) Gamma1, no T)
-            call eos_fields_n(tab, [F_LNP, F_GAMMA1], n, rp(i0:i1), s(i0:i1), q(i0:i1, 1:2))
-            q(i0:i1, 3) = q(i0:i1, 2)
+        case (C_INTERIOR)
+          if (.not. (jin .and. kin)) cycle
+          seg(:, 1) = [1, nb(1)]
+        case (C_SHELL)
+          if (jin .and. kin) then                     ! interior column: its radial ghosts
+            ns = 2
+            seg(:, 1) = [1 - ng, 0]
+            seg(:, 2) = [nb(1) + 1, nb(1) + ng]
           else
-            call eos_fields_n(tab, [F_LNP, F_LNT, F_GAMMA1], n, rp(i0:i1), s(i0:i1), q(i0:i1, :))
+            seg(:, 1) = [1 - ng, nb(1) + ng]
           end if
-          d(i0:i1) = q(i0:i1, 1) - lnp0(i0:i1)
-          call vexpm1(n, d(i0:i1), e1(i0:i1))
-          call vexp(n, q(i0:i1, 1), e2(i0:i1))
-          if (.not. nT) call vexp(n, q(i0:i1, 2), e3(i0:i1))
-          do i = i0, i1
-            p1_G(i, j, k) = p0(i)*e1(i)
-            cs_G(i, j, k) = sqrt(q(i, 3)*e2(i)/rp(i))/xi(i)                        ! reduced (RSST)
-          end do
-          if (.not. nT) T_G(i0:i1, j, k) = e3(i0:i1)
-          ! with B: the fast speed's bound c_red + v_A (the diffusion's speed; v_A capped, see va_eff)
-          if (use_B) then
-!GCC$ ivdep
-!DIR$ IVDEP
-            do i = i0, i1
-              cs_G(i, j, k) = cs_G(i, j, k) + va_cap(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rp(i), cs_G(i, j, k), &
-                  norm2(State_GVB(i, j, k, vr_:vp_, ib)), min(drdxi_c(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), &
-                  r_c(i)*sn_t(j)*Metric_DB(3, ib)%Dx_I(k)), sw_r(i))
-            end do
-          end if
-        else
-          call eos_field_n(tab, F_LNP, n, rp(i0:i1), s(i0:i1), q(i0:i1, 1))
-          d(i0:i1) = q(i0:i1, 1) - lnp0(i0:i1)
-          call vexpm1(n, d(i0:i1), e1(i0:i1))
-          do i = i0, i1
-            p1_G(i, j, k) = p0(i)*e1(i)
-          end do
-        end if
+        case default
+          call arbor_abort('derived: unknown cells')
+        end select
+        do m = 1, ns
+          call eval_seg(seg(1, m), seg(2, m))
+        end do
       end do
     end do
+  contains
+    subroutine eval_seg(i0, i1)
+      integer, intent(in) :: i0, i1
+      integer :: n
+      n = i1 - i0 + 1
+      call eos_fields_n(tab, ids(1:nf), n, rp(i0:i1), s(i0:i1), q(i0:i1, 1:nf))
+      if (wp1) then
+        d(i0:i1) = q(i0:i1, ip) - lnp0(i0:i1)
+        call vexpm1(n, d(i0:i1), e1(i0:i1))
+        p1_G(i0:i1, j, k) = p0(i0:i1)*e1(i0:i1)
+      end if
+      if (wcs) then
+        call vexp(n, q(i0:i1, ip), e2(i0:i1))
+        do i = i0, i1
+          cs_G(i, j, k) = sqrt(q(i, ig)*e2(i)/rp(i))/xi(i)                         ! reduced (RSST)
+        end do
+        ! with B: the fast speed's bound c_red + v_A (v_A capped, see va_eff; va_cap the same arithmetic)
+        if (use_B) then
+!GCC$ ivdep
+!DIR$ IVDEP
+          do i = i0, i1
+            cs_G(i, j, k) = cs_G(i, j, k) + va_cap(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rp(i), cs_G(i, j, k), &
+                norm2(State_GVB(i, j, k, vr_:vp_, ib)), min(drdxi_c(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), &
+                r_c(i)*sn_t(j)*Metric_DB(3, ib)%Dx_I(k)), sw_r(i))
+          end do
+        end if
+      end if
+      if (wT) then
+        call vexp(n, q(i0:i1, iT), e3(i0:i1))
+        T_G(i0:i1, j, k) = e3(i0:i1)
+      end if
+    end subroutine eval_seg
   end subroutine derived
 
   ! ================================================================ radial semi-implicit
@@ -661,17 +678,18 @@ contains
   ! S = max(0, c^2 dt^2/(si_cfl - C_f)^2 - dr^2/4), c the fast speed bound of
   ! derived (c_s + v_A), C_f = |v_r| dt/dr (at most si_cfl/2 in the formula);
   ! si_alfven: siSa_B the same with c the radial Alfven speed (Boris reduced)
-  subroutine si_coeff(ib, dt)
+  subroutine si_coeff(ib, dt, cells)
     integer, intent(in) :: ib
     real(dp), intent(in) :: dt
+    integer, intent(in) :: cells                    ! derived's cells: C_ALL (rhs reuses rho_G, p1_G) or C_INTERIOR
     integer :: i, j, k, ilo, ihi
     real(dp) :: dr, cf, rp
     if (.not. si_cols) call arbor_abort('cz3d: si_radial: the columns were not distributed (cz_columns_to_ranks)')
     siS_B(:, :, :, ib) = 0.0_dp
     if (si_alfven) siSa_B(:, :, :, ib) = 0.0_dp
     if (.not. si_in(ib)) return
-    call derived(ib, .true., no_T=.true.)        ! (T is not needed here nor by rhs)
-    eos_fresh = .true.                          ! (rhs, next on this block and state, reuses rho_G and p1_G)
+    call derived(ib, D_P1 + D_CS, cells)        ! (T is not needed here nor by rhs)
+    eos_fresh = cells == C_ALL                          ! (rhs, next on this block and state, reuses rho_G and p1_G)
     ! the block's cells inside the range less its two end cells at each end
     ilo = max(1, si_i0 + 2 - r_off)
     ihi = min(nb(1), si_i1 - 2 - r_off)
@@ -774,7 +792,7 @@ contains
       ib = iBlocks(jb)
       call cz_bind(ib)
       if (b_eta_dr > 0.0_dp) then                        ! (CZTR_2D's eta = b_eta_dr (|v| [+ c_s]) dr/2)
-        if (b_eta_cs) call derived(ib, .false.)
+        if (b_eta_cs) call derived(ib, D_P1, C_ALL)
         do k = 1, nb(3)
           do j = 1, nb(2)
             do i = 1, nb(1)
@@ -786,7 +804,7 @@ contains
         end do
         cycle
       end if
-      call derived(ib, .true.)
+      call derived(ib, D_CS, C_ALL)
       associate (th => Metric_DB(2, ib)%X_I, dth_ => Metric_DB(2, ib)%Dx_I, dph_ => Metric_DB(3, ib)%Dx_I)
       do k = 1, nb(3)
         do j = 1, nb(2)
@@ -840,7 +858,9 @@ contains
       end do
     end if
     call cz_unbind()
+    call tic(T_G_ETA)
     call arbor_fill_ghosts(EtaB_GB, n_ghost=1, faces_only=.true.)
+    call toc(T_G_ETA)
     do jb = 1, size(iBlocks)
       ib = iBlocks(jb)
       if (Key_IB(KI+1, ib) == 0) EtaB_GB(0, :, :, 1, ib) = EtaB_GB(1, :, :, 1, ib)
@@ -1045,6 +1065,7 @@ contains
     integer, intent(in) :: iBlocks(:)
     real(dp), intent(in) :: t, dt
     integer :: stage, jb, ib, i, j, k, v
+    logical :: overlap
     real(dp) :: cdt, wdamp, fdamp
     real(dp), parameter :: c_stage(4) = [0.0_dp, 0.25_dp, 1.0_dp/3.0_dp, 0.5_dp]
     call tic(T_ADV)
@@ -1095,10 +1116,52 @@ contains
       end do
       call cz_unbind()
     end if
+    overlap = mr_levels == 0                         ! (multirate: begin interpolates sources in time)
+    if (overlap) then
+      if (.not. allocated(p1_IB)) allocate(p1_IB(nb(1), nb(2), nb(3), size(State_GVB, 5)))
+      if (size(p1_IB, 4) /= size(State_GVB, 5)) then
+        deallocate(p1_IB)
+        allocate(p1_IB(nb(1), nb(2), nb(3), size(State_GVB, 5)))
+      end if
+    end if
     do stage = 1, 4
       call tic(T_GHOST)
-      call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + c_stage(stage)*dt)
+      call tic(T_G_RK)
+      if (overlap) then
+        call arbor_fill_ghosts_begin(State_GVB, n_ghost=2, faces_only=.true., time=t + c_stage(stage)*dt)
+      else
+        call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + c_stage(stage)*dt)
+      end if
+      call toc(T_G_RK)
+      call toc(T_GHOST)
+      if (overlap) then
+        ! while the ghost messages travel: the interior cells' equation of
+        ! state (local, no ghosts), stored per block, and at stage 1 the
+        ! semi-implicit coefficients (interior cells only)
+        call tic(T_R_OVL)
+        do jb = 1, size(iBlocks)
+          ib = iBlocks(jb)
+          if (skip_frozen(ib)) cycle
+          call cz_bind(ib)
+          call tic(T_R_SIC)
+          if (si_radial .and. stage == 1) call si_coeff(ib, dt, C_INTERIOR)   ! (its derived: the interior's p1 too)
+          call toc(T_R_SIC)
+          if (.not. (si_radial .and. stage == 1 .and. si_in(ib))) call derived(ib, D_P1, C_INTERIOR)
+          p1_IB(:, :, :, ib) = p1_G(1:nb(1), 1:nb(2), 1:nb(3))
+          call mpi_progress()
+        end do
+        call cz_unbind()
+        call toc(T_R_OVL)
+        call tic(T_GHOST)
+        call tic(T_G_RK)
+        call arbor_fill_ghosts_end(State_GVB)
+        call toc(T_G_RK)
+        call toc(T_GHOST)
+      end if
+      call tic(T_GHOST)
+      call tic(T_G_JOIN)
       call join_bc()
+      call toc(T_G_JOIN)
       call toc(T_GHOST)
       call tic(T_RHS)
       do jb = 1, size(iBlocks)
@@ -1106,9 +1169,18 @@ contains
         if (skip_frozen(ib)) cycle                    ! (the frozen side: not computed, restored below)
         call cz_bind(ib)
         want_work = budget_on .and. stage == 1
-        call tic(T_R_SIC)
-        if (si_radial .and. stage == 1) call si_coeff(ib, dt)
-        call toc(T_R_SIC)
+        if (overlap) then
+          ! the ghost shell's p1 now, the interior's from the wait
+          call tic(T_R_EOS)
+          call derived(ib, D_P1, C_SHELL)
+          p1_G(1:nb(1), 1:nb(2), 1:nb(3)) = p1_IB(:, :, :, ib)
+          eos_fresh = .true.
+          call toc(T_R_EOS)
+        else
+          call tic(T_R_SIC)
+          if (si_radial .and. stage == 1) call si_coeff(ib, dt, C_ALL)
+          call toc(T_R_SIC)
+        end if
         call rhs(ib)
         call tic(T_R_UPD)
         if (allocated(fzb_B)) R_CV(:, :, :, br_:psi_) = 0.0_dp     ! (test_freeze_b)
@@ -1180,8 +1252,14 @@ contains
     if (use_atmosphere) then
       ! conduction (the ghosts in every direction), losses, heating
       call tic(T_GHOST)
-      call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=t + dt)
+      call tic(T_G_ATM)
+      ! (not psi: the atmosphere physics does not read it, and the diffusion's
+      ! fill refreshes every variable before anything else does)
+      call arbor_fill_ghosts(State_GVB, iVarMax=merge(psi_ - 1, nv, use_B), n_ghost=2, faces_only=.true., time=t + dt)
+      call toc(T_G_ATM)
+      call tic(T_G_JOIN)
       call join_bc()
+      call toc(T_G_JOIN)
       call toc(T_GHOST)
       call tic(T_ATM)
       do jb = 1, size(iBlocks)
@@ -1195,8 +1273,12 @@ contains
     if (use_diffusion) then
       ! (b_diff_form = 'resistive': the edge ghosts too, for the tangential derivatives at block faces)
       call tic(T_GHOST)
+      call tic(T_G_DIF)
       call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.not. (use_B .and. b_diff_form == 'resistive'), time=t + dt)
+      call toc(T_G_DIF)
+      call tic(T_G_JOIN)
       call join_bc()
+      call toc(T_G_JOIN)
       call toc(T_GHOST)
       call tic(T_DIFF)
       call tic(T_D_SIP)
@@ -1419,7 +1501,7 @@ contains
     integer :: i, j, k, c
     real(dp) :: rr, sth, cth, rho, vr, vt, vp
     call tic(T_R_EOS)
-    if (.not. eos_fresh) call derived(ib, .false.)
+    if (.not. eos_fresh) call derived(ib, D_P1, C_ALL)
     eos_fresh = .false.
     call toc(T_R_EOS)
     call tic(T_R_MASS)
@@ -2016,12 +2098,19 @@ contains
     ! columns per block the wall conditions alone give them (no exchange);
     ! with radial blocks the ghosts between blocks need a fill
     if (m < n_r) then
-      if (present(time)) then
+      call tic(T_G_TR)
+      if (si_cols .and. use_diffusion .and. .not. first) then
+        ! the columns are whole on their rank (si_radial): the radial ghosts
+        ! alone, copied between the column's blocks (what the fill's radial
+        ! portals copy; the diffusion's fill later refreshes every ghost)
+        call radial_ghosts_local()
+      else if (present(time)) then
         call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true., time=time)
       else
         call arbor_fill_ghosts(State_GVB, n_ghost=2, faces_only=.true.)
       end if
       call join_bc()
+      call toc(T_G_TR)
     end if
     do jb = 1, size(iBlocks)
       ib = iBlocks(jb)
@@ -2092,6 +2181,47 @@ contains
     call cz_unbind()
     if (grey_atm_blocks > 0 .and. use_radiation) call grey_atm_all(dt)
   end subroutine cz_transport_all
+
+  ! Let MPI move the ghost messages in flight (Open MPI's shared memory and
+  ! most networks send large messages by rendezvous: the data moves only
+  ! while the ranks are inside MPI calls); a cheap probe does it
+  subroutine mpi_progress()
+    use mpi_f08, only: MPI_Iprobe, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_STATUS_IGNORE
+    logical :: flag
+    call MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, flag, MPI_STATUS_IGNORE)
+  end subroutine mpi_progress
+
+  ! The two radial ghost layers of the transport's blocks (the CZ blocks;
+  ! all blocks without the atmosphere) at their interior (j, k), copied from
+  ! the blocks below and above in the same column (si_cb: whole columns on
+  ! this rank), all variables; at the domain's bottom (and top) the walls
+  ! (wall_bc, the fill's physical boundary). The same values the fill's
+  ! radial portals and boundary give these cells.
+  subroutine radial_ghosts_local()
+    integer :: c, q, nk, ib, ibd, ibu, kb
+    nk = si_kb1 - si_kb0 + 1
+    if (si_kb0 /= 0 .or. (si_kb1 + 1)*nb(1) /= n_r) &
+        call arbor_abort('radial_ghosts_local: the si_radial range must be the whole column')
+    do c = 1, si_ncol
+      do q = 1, nk
+        ib = si_cb(q, c)
+        kb = Key_IB(KI+1, ib)
+        if (use_atmosphere .and. kb*nb(1) >= k_join) cycle          ! (above the join: no transport)
+        if (q > 1) then
+          ibd = si_cb(q - 1, c)
+          State_GVB(1-ng:0, 1:nb(2), 1:nb(3), :, ib) = State_GVB(nb(1)-ng+1:nb(1), 1:nb(2), 1:nb(3), :, ibd)
+        else
+          call wall_bc(State_GVB, 1, nv, ib, 1, 1, ng)
+        end if
+        if (q < nk) then
+          ibu = si_cb(q + 1, c)
+          State_GVB(nb(1)+1:nb(1)+ng, 1:nb(2), 1:nb(3), :, ib) = State_GVB(1:ng, 1:nb(2), 1:nb(3), :, ibu)
+        else
+          call wall_bc(State_GVB, 1, nv, ib, 1, 2, ng)
+        end if
+      end do
+    end do
+  end subroutine radial_ghosts_local
 
   ! grey_atm_blocks: the grey solve in the first grey_atm_blocks radial blocks
   ! above the join, in radial order, each column part's bottom flux the
@@ -2186,7 +2316,7 @@ contains
     call toc(T_D_PRE)
     call tic(T_D_EOS)
     ! (above the join T and p1 are not used: no energy flux, no heating there; the budget needs them)
-    call derived(ib, .true., cs_only=in_atm .and. .not. budget_on, faces1=.true.)
+    call derived(ib, merge(D_CS, D_P1 + D_CS + D_T, in_atm .and. .not. budget_on), C_FACES1)
     call toc(T_D_EOS)
     call tic(T_D_FA)
     associate (m1 => Metric_DB(1, ib), m2 => Metric_DB(2, ib), m3 => Metric_DB(3, ib))
