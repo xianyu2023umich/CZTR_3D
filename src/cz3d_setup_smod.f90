@@ -49,6 +49,7 @@ contains
         call arbor_abort('cz3d: multirate needs dt1 = 0 and no energy budget or L_z correction')
     call cz_unbind()
     rsst_h2012 = rsst_form == 'hotta2012'
+    glm_cfl = glm_ch == 'cfl'
     grey_i0_g = 1                                 ! first cell of the implicit grey solve (whole column)
     if (grey_top_km > 0.0_dp) then
       do i = 1, n_r

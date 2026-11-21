@@ -460,7 +460,7 @@ contains
     real(dp) :: x(n_tim + 2), mn, mean, mx
     integer :: k, kk
     ! the print order: the diffusion's parts after it
-    integer, parameter :: order(n_tim + 2) = [T_ADV, T_GHOST, T_RHS, T_SI, T_TRANS, T_ATM, T_DIFF, T_D_SIP, T_D_ETA, T_D_PRE, &
+    integer, parameter :: order(n_tim + 2) = [T_ADV, T_GHOST, T_RHS, T_R_EOS, T_R_MASS, T_R_ADV, T_R_PRS, T_R_MCURL, T_R_MLOOP, T_R_SIC, T_R_UPD, T_SI, T_TRANS, T_ATM, T_DIFF, T_D_SIP, T_D_ETA, T_D_PRE, &
         T_D_EOS, T_D_FA, T_D_FB, T_D_FR, T_D_FE, T_D_DIV, T_D_UPD, T_D_IMP, n_tim + 1, T_DT, T_AFTER, n_tim + 2]
     character(len=200) :: msg
     character(len=24) :: lab
