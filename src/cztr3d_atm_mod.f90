@@ -27,7 +27,7 @@ module cztr3d_atm_mod
   use cz3d_params_mod
   use cz3d_bg_mod, only: n_r, k_join, r_c, r_f, z_c, rho0, s0, p0, g_c, tab, ddr_c, r_top_cz
   use radiative_loss_mod
-  use eos_table, only: eos_fields_n, eos_eval, eos_s_from_rho_T, n_field, F_LNP, F_LNT, F_GAMMA1, F_LNCV, F_LNNE
+  use eos_table, only: eos_fields_n, eos_field_n, eos_eval, eos_s_from_rho_T, n_field, F_LNP, F_LNT, F_GAMMA1, F_LNCV, F_LNNE
   implicit none
   private
 
@@ -45,6 +45,10 @@ module cztr3d_atm_mod
   ! relaxing conductive fluxes (faces in r, theta, phi) and the last losses per block slot
   real(dp), allocatable :: qr_B(:,:,:,:), qt_B(:,:,:,:), qp_B(:,:,:,:)
   real(dp), allocatable, public :: Qloss_B(:,:,:,:), Qheat_B(:,:,:,:)   ! the last step's losses and heating [erg/cm3/s] (box output)
+  ! the floors' action (atm_floors), summed over calls, per global radial cell:
+  ! (1, i) cells checked, (2, i) rho floored, (3, i) T floored (timers_report prints them)
+  ! (4, i) the energy the T floor added [erg] (rho T ds dV; Yin-Yang overlap cells count twice)
+  real(dp), allocatable, public :: floor_cnt(:,:)
   ! one-block scratch: cells 0:nb(1)+1, 0:nb(2)+1, 0:nb(3)+1 (the faces' ghost cross only)
   real(dp), allocatable :: rho_A(:,:,:), T_A(:,:,:), cv_A(:,:,:), cs_A(:,:,:), ne_A(:,:,:), p_A(:,:,:)
   real(dp), allocatable :: F1(:,:,:,:), F2(:,:,:,:), F3(:,:,:,:), Dv(:,:,:,:)
@@ -387,20 +391,50 @@ contains
     end subroutine face_flux
   end subroutine atm_block
 
-  ! Floors of block ib (interior cells): rho >= rho_floor; T >= T_floor where S > 0.5
+  ! Floors of block ib (interior cells): rho >= rho_floor; T >= T_floor where S > 0.5.
+  ! T by the EOS's column evaluator (ln T only; the same values as eos_eval)
+  ! over the row's cells with S > 0.5; the inversion only where T < T_floor
   subroutine atm_floors(ib)
     integer, intent(in) :: ib
-    real(dp) :: rh, out(n_field)
-    integer :: i, j, k
+    real(dp) :: rh, rp(nb(1)), ss(nb(1)), lt(nb(1))
+    integer :: i, j, k, n, idx(nb(1)), m, r0
+    logical :: on(nb(1))
+    if (.not. allocated(floor_cnt)) then
+      allocate(floor_cnt(4, n_r))
+      floor_cnt = 0.0_dp
+    end if
+    r0 = Key_IB(KI+1, ib)*nb(1)                      ! (the block's radial offset)
+    m = 0
+    do i = 1, nb(1)
+      on(i) = atm_switch(z_c(i)) > 0.5_dp
+      if (on(i)) then
+        m = m + 1
+        idx(m) = i
+      end if
+    end do
     do k = 1, nb(3)
       do j = 1, nb(2)
         do i = 1, nb(1)
+          if (State_GVB(i, j, k, RHO1, ib) < rho_floor - rho0(i)) floor_cnt(2, r0 + i) = floor_cnt(2, r0 + i) + 1.0_dp
           State_GVB(i, j, k, RHO1, ib) = max(State_GVB(i, j, k, RHO1, ib), rho_floor - rho0(i))
-          if (atm_switch(z_c(i)) > 0.5_dp) then
-            rh = rho0(i) + State_GVB(i, j, k, RHO1, ib)
-            call eos_eval(tab, rh, s0(i) + State_GVB(i, j, k, S1, ib), out)
-            if (exp(out(F_LNT)) < T_floor) State_GVB(i, j, k, S1, ib) = &
-                eos_s_from_rho_T(tab, rh, T_floor, s_guess=s0(i) + State_GVB(i, j, k, S1, ib)) - s0(i)
+          floor_cnt(1, r0 + i) = floor_cnt(1, r0 + i) + 1.0_dp
+        end do
+        if (m == 0) cycle
+        do n = 1, m
+          i = idx(n)
+          rp(n) = rho0(i) + State_GVB(i, j, k, RHO1, ib)
+          ss(n) = s0(i) + State_GVB(i, j, k, S1, ib)
+        end do
+        call eos_field_n(tab, F_LNT, m, rp, ss, lt)
+        do n = 1, m
+          if (exp(lt(n)) < T_floor) then
+            i = idx(n)
+            floor_cnt(3, r0 + i) = floor_cnt(3, r0 + i) + 1.0_dp
+            rh = rp(n)
+            State_GVB(i, j, k, S1, ib) = eos_s_from_rho_T(tab, rh, T_floor, s_guess=ss(n)) - s0(i)
+            floor_cnt(4, r0 + i) = floor_cnt(4, r0 + i) + rh*0.5_dp*(exp(lt(n)) + T_floor) &
+                *(s0(i) + State_GVB(i, j, k, S1, ib) - ss(n)) &
+                *Metric_DB(1, ib)%Vol_I(i)*Metric_DB(2, ib)%Vol_I(j)*Metric_DB(3, ib)%Vol_I(k)
           end if
         end do
       end do
@@ -421,11 +455,13 @@ contains
   ! dt_rad_factor x the shortest loss time rho cv T/Q_loss of block ib (the
   ! last step's losses; huge if none); rate_r (optional): per radial cell,
   ! raised to cfl over the cell's own loss-time limit (local time stepping)
-  real(dp) function atm_dt(ib, rate_r) result(dt)
+  real(dp) function atm_dt(ib, rate_r, i_min) result(dt)
     integer, intent(in) :: ib
     real(dp), intent(inout), optional :: rate_r(:)
-    real(dp) :: out(n_field), rh
+    integer, intent(out), optional :: i_min        ! the block's cell (radial index) of the limit
+    real(dp) :: out(n_field), rh, d
     integer :: i, j, k
+    if (present(i_min)) i_min = 0
     dt = huge(1.0_dp)
     if (.not. (use_losses .and. allocated(Qloss_B))) return
     do k = 1, nb(3)
@@ -434,7 +470,11 @@ contains
           if (atm_switch(z_c(i)) <= 0.5_dp .or. Qloss_B(i, j, k, ib) <= 0.0_dp) cycle
           rh = rho0(i) + State_GVB(i, j, k, RHO1, ib)
           call eos_eval(tab, rh, s0(i) + State_GVB(i, j, k, S1, ib), out)
-          dt = min(dt, rh*exp(out(F_LNCV))*exp(out(F_LNT))/Qloss_B(i, j, k, ib))
+          d = rh*exp(out(F_LNCV))*exp(out(F_LNT))/Qloss_B(i, j, k, ib)
+          if (d < dt) then
+            dt = d
+            if (present(i_min)) i_min = i
+          end if
           if (present(rate_r)) rate_r(i) = max(rate_r(i), cfl*Qloss_B(i, j, k, ib) &
               /(dt_rad_factor*rh*exp(out(F_LNCV))*exp(out(F_LNT))))
         end do

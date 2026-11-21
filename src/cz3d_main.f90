@@ -289,6 +289,7 @@ program cz3d_run
   write(msg, '(A,I0,A,ES11.4,A,F10.1,A,F8.4,A)') 'done: ', n_step, ' steps, t = ', t, ' s, wall ', wall, ' s (', &
       1.0e6_dp*wall*n_ranks/(real(max(n_step, 1), dp)*real(tree%n_leaf, dp)*product(nb)), ' us per cell-step per rank)'
   call arbor_print(msg)
+  call timers_report(wall, n_step)
   call dump_shells_write()
   call export_state_write(t, i_step + n_step)
   write(msg, '(A,I0)') 'state checksum: ', state_checksum()

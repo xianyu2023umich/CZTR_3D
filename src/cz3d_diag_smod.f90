@@ -379,6 +379,7 @@ contains
     class(cz3d_app_t), intent(inout) :: self
     integer, intent(in) :: iStep
     real(dp), intent(in) :: t
+    call tic(T_AFTER)
     if (probe_radius_deg > 0.0_dp) call probe_write(iStep, t)
     if (box_radius_deg > 0.0_dp .and. box_every > 0) then
       if (mod(iStep, box_every) == 0) call box_write(iStep, t)
@@ -401,6 +402,7 @@ contains
     end if
     if (mod(iStep, n_log) == 0 .or. t >= t_end*(1.0_dp - 1.0e-12_dp)) then
       call cz_log(iStep, t)
+      call dt_report(iStep)
       if (use_atmosphere) call footpoint_report(iStep, t)
     end if
     if (prof_every > 0) then
@@ -410,7 +412,188 @@ contains
     end if
     if (budget_on .and. (t >= t_next_bud - 1.0e-9_dp*dt_budget .or. t >= t_end*(1.0_dp - 1.0e-12_dp))) &
         call budget_write(iStep, t)
+    dtl = huge(1.0_dp)                    ! (the dt report: the next step's minima)
+    call toc(T_AFTER)
   end subroutine cz_after_step
+
+  ! The dt report (every log line, stdout): per constraint (CFL sum, wave cap,
+  ! losses) the smallest dt over all ranks in this step and its cell
+  subroutine dt_report(iStep)
+    integer, intent(in) :: iStep
+    real(dp) :: v(8), g
+    integer :: c, r, rmin
+    character(len=240) :: msg
+    character(len=*), parameter :: nm(3) = ['CFL sum  ', 'wave cap ', 'losses   ']
+    character(len=*), parameter :: dn(3) = ['radial', 'theta ', 'phi   ']
+    write(msg, '(A,I0,A)') 'dt limits (step ', iStep, '):'
+    call arbor_print(msg)
+    do c = 1, 3
+      g = arbor_min(dtl(c, 1))
+      if (g >= huge(1.0_dp)) cycle
+      r = merge(my_rank, n_ranks, dtl(c, 1) == g)
+      rmin = arbor_min(r)
+      v = 0.0_dp
+      if (my_rank == rmin) v = dtl(c, :)
+      v = arbor_sum(v)
+      if (c == 1) then
+        write(msg, '(4X,A,F8.4,A,I4,A,F10.1,A,F7.1,A,F7.1,A,F7.1,A,F7.1,A,A)') nm(c), g, ' s  cell ', nint(v(2)), &
+            ' (z ', v(3), ' km, dr ', v(8), ' km): |v_r| ', v(4)/1.0e5_dp, ', radial wave ', v(5)/1.0e5_dp, &
+            ', horizontal fast ', v(6)/1.0e5_dp, ' km/s; dominant ', trim(dn(nint(v(7))))
+      else if (c == 2) then
+        write(msg, '(4X,A,F8.4,A,I4,A,F10.1,A,F7.1,A,F7.1,A)') nm(c), g, ' s  cell ', nint(v(2)), ' (z ', v(3), &
+            ' km, dr ', v(8), ' km): c ', v(5)/1.0e5_dp, ' km/s'
+      else
+        write(msg, '(4X,A,F8.4,A,I4,A,F10.1,A)') nm(c), g, ' s  cell ', nint(v(2)), ' (z ', v(3), ' km)'
+      end if
+      call arbor_print(msg)
+    end do
+  end subroutine dt_report
+
+  ! The stage timers at the end of the run (stdout): per stage the mean, min
+  ! and max over the ranks [s], the mean's share of the run's wall time, and
+  ! max/mean (load imbalance; time waiting for other ranks shows up in the
+  ! ghost fill and in 'other': ARBOR's loop, the dt reduction, restart and
+  ! plot files)
+  module subroutine timers_report(wall, n_step)
+    real(dp), intent(in) :: wall
+    integer, intent(in) :: n_step
+    real(dp) :: x(n_tim + 2), mn, mean, mx
+    integer :: k, kk
+    ! the print order: the diffusion's parts after it
+    integer, parameter :: order(n_tim + 2) = [T_ADV, T_GHOST, T_RHS, T_SI, T_TRANS, T_ATM, T_DIFF, T_D_SIP, T_D_ETA, T_D_PRE, &
+        T_D_EOS, T_D_FA, T_D_FB, T_D_FR, T_D_FE, T_D_DIV, T_D_UPD, T_D_IMP, n_tim + 1, T_DT, T_AFTER, n_tim + 2]
+    character(len=200) :: msg
+    character(len=24) :: lab
+    x(1:n_tim) = tim_acc
+    x(n_tim + 1) = tim_acc(T_ADV) - sum(tim_acc(T_GHOST:T_DIFF))       ! the rest of advance
+    x(n_tim + 2) = wall - tim_acc(T_ADV) - tim_acc(T_DT) - tim_acc(T_AFTER)
+    write(msg, '(A,I0,A,F9.1,A,I0,A)') 'timers: ', n_step, ' steps, wall ', wall, ' s, ', n_ranks, &
+        ' ranks; per stage [s]: mean, min, max over ranks, mean/wall, max/mean'
+    call arbor_print(msg)
+    do kk = 1, n_tim + 2
+      k = order(kk)
+      mean = arbor_sum(x(k))/n_ranks
+      mn = arbor_min(x(k))
+      mx = arbor_max(x(k))
+      if (k <= n_tim) then
+        lab = tim_name(k)
+      else if (k == n_tim + 1) then
+        lab = '  other (in advance)'
+      else
+        lab = 'other (ARBOR, I/O, MPI)'
+      end if
+      write(msg, '(2X,A24)') lab
+      write(msg(27:), '(3F10.2,F8.1,A,F7.2)') mean, mn, mx, 100.0_dp*mean/max(wall, tiny(1.0_dp)), ' %', &
+          mx/max(mean, tiny(1.0_dp))
+      call arbor_print(msg)
+    end do
+    if (b_eta_explicit) then
+      x(1:2) = eta_cap_n
+      call arbor_sum_inplace(x(1:2))
+      write(msg, '(A,ES10.3,A,ES10.3,A)') "b_eta_radial = 'explicit': eta capped in ", x(1), ' of ', x(2), ' cell-steps'
+      call arbor_print(msg)
+    end if
+    call floors_report()
+  end subroutine timers_report
+
+  ! The floors' action over the run (atm_floors' counts): the fraction of the
+  ! checked cell-calls that a floor changed, per height band of shells with any
+  ! (one line per band of consecutive shells; atm_floors runs 3 times per step)
+  subroutine floors_report()
+    use cztr3d_atm_mod, only: floor_cnt
+    real(dp), allocatable :: c(:,:)
+    integer :: i, i0, f
+    character(len=200) :: msg
+    if (.not. use_atmosphere) return
+    allocate(c(4, n_r))
+    c = 0.0_dp
+    if (allocated(floor_cnt)) c = floor_cnt
+    call arbor_sum_inplace(c)
+    write(msg, '(A,ES9.2,A,ES9.2,A,ES9.2,A,ES9.2,A)') 'floors: rho_floor ', rho_floor, ' g/cm3 acted in ', &
+        sum(c(2, :)), ' of ', sum(c(1, :)), ' cell-calls; T_floor ', T_floor, ' K:'
+    call arbor_print(msg)
+    ! the T floor's mean power over the run, as a flux through the photosphere (4 pi R^2)
+    if (dt_run > 0.0_dp) then
+      write(msg, '(A,ES10.3,A,ES10.3,A,F8.1,A)') '    T floor: energy added ', sum(c(4, :)), ' erg, mean power ', &
+          sum(c(4, :))/dt_run, ' erg/s = ', sum(c(4, :))/dt_run/(4.0_dp*pi*r_f(k_join)**2)/1.0e3_dp, &
+          ' x 1e3 erg/cm2/s over the sphere (Yin-Yang overlap counted twice, ~+6%)'
+      call arbor_print(msg)
+    end if
+    ! for comparison: the radiative losses and the heating (the last step's
+    ! Qloss_B, Qheat_B) integrated over the floor's heights, z 0 .. 1200 km
+    block
+      use cztr3d_atm_mod, only: Qloss_B, Qheat_B
+      real(dp) :: ql(2), qs(n_r)
+      integer :: jb, ib, j, k
+      ql = 0.0_dp
+      qs = 0.0_dp
+      if (allocated(Qloss_B)) then
+        do jb = 1, nBlock
+          ib = iBlockList_I(jb)
+          call cz_bind(ib)
+          do k = 1, nb(3)
+            do j = 1, nb(2)
+              do i = 1, nb(1)
+                if (r_off + i <= k_join .or. z_c(i) > 1.2e8_dp) cycle
+                ql = ql + [Qloss_B(i, j, k, ib), Qheat_B(i, j, k, ib)]*Metric_DB(1, ib)%Vol_I(i) &
+                    *Metric_DB(2, ib)%Vol_I(j)*Metric_DB(3, ib)%Vol_I(k)
+                qs(r_off + i) = qs(r_off + i) + Qloss_B(i, j, k, ib)*Metric_DB(1, ib)%Vol_I(i) &
+                    *Metric_DB(2, ib)%Vol_I(j)*Metric_DB(3, ib)%Vol_I(k)
+              end do
+            end do
+          end do
+        end do
+        call cz_unbind()
+      end if
+      call arbor_sum_inplace(ql)
+      write(msg, '(A,F8.1,A,F8.1,A)') '    z 0-1200 km, last step: losses ', ql(1)/(4.0_dp*pi*r_f(k_join)**2)/1.0e3_dp, &
+          ', heating ', ql(2)/(4.0_dp*pi*r_f(k_join)**2)/1.0e3_dp, ' x 1e3 erg/cm2/s over the sphere'
+      call arbor_print(msg)
+      call arbor_sum_inplace(qs)
+      call arbor_print('    per shell (z km: losses, T-floor power, x 1e3 erg/cm2/s):')
+      msg = '     '
+      do i = k_join + 1, n_r
+        if (z_c(i) > 1.2e8_dp) exit
+        if (len_trim(msg) > 150) then
+          call arbor_print(msg)
+          msg = '     '
+        end if
+        write(msg(len_trim(msg)+1:), '(1X,I0,A,F0.0,A,F0.0)') nint(z_c(i)/1.0e5_dp), ': ', &
+            qs(i)/(4.0_dp*pi*r_f(k_join)**2)/1.0e3_dp, '/', c(4, i)/dt_run/(4.0_dp*pi*r_f(k_join)**2)/1.0e3_dp
+      end do
+      call arbor_print(msg)
+    end block
+    do f = 2, 3
+      i = 1
+      do while (i <= n_r)
+        if (c(f, i) <= 0.0_dp) then
+          i = i + 1
+          cycle
+        end if
+        i0 = i
+        do while (i < n_r)
+          if (c(f, i + 1) <= 0.0_dp) exit
+          i = i + 1
+        end do
+        write(msg, '(4X,A,A,I4,A,I4,A,F9.1,A,F9.1,A,F8.4,A,F8.4)') merge('rho', 'T  ', f == 2), ' floored in cells ', i0, &
+            ' ..', i, ' (z ', z_c(i0)/1.0e5_dp, ' ..', z_c(i)/1.0e5_dp, ' km): fraction ', &
+            minval(c(f, i0:i)/max(c(1, i0:i), 1.0_dp)), ' ..', maxval(c(f, i0:i)/max(c(1, i0:i), 1.0_dp))
+        call arbor_print(msg)
+        i = i + 1
+      end do
+    end do
+    ! the T floor per shell where it acts in more than 1% of the cell-calls: z [km] and the fraction
+    msg = '    T floor > 1% (z km: fraction):'
+    do i = 1, n_r
+      if (c(3, i) <= 0.01_dp*max(c(1, i), 1.0_dp)) cycle
+      if (len_trim(msg) > 170) then
+        call arbor_print(msg)
+        msg = '     '
+      end if
+      write(msg(len_trim(msg)+1:), '(1X,I0,A,F5.2)') nint(z_c(i)/1.0e5_dp), ':', c(3, i)/c(1, i)
+    end do
+    call arbor_print(msg)
+  end subroutine floors_report
 
   ! Footpoint monitor (use_atmosphere, every log line): out_dir/footpoints.txt
   ! with, over all columns, the lowest gas pressure in the shell nearest

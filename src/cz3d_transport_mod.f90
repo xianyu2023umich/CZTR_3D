@@ -38,7 +38,7 @@ module cz3d_transport_mod
   integer, public :: grey_i0 = 1
   logical :: top_cooling = .false.
 
-  public :: transport_init, set_top_cooling, transport_column, kappa, tr_view
+  public :: transport_init, set_top_cooling, transport_column, grey_atm_column, kappa, tr_view
 
 contains
 
@@ -248,6 +248,49 @@ contains
           q_rad(i0-1:n_act), J(i0:n_act), Qrad(i0:n_act))
     end if
   end subroutine grey_column
+
+  ! grey_atm_blocks: the grey Eddington solve in an atmosphere block's column
+  ! part (cells 1..n_c of the bound view), separately from the CZ below: the
+  ! atmosphere is grey-thin (the CZ's top condition takes optical depth
+  ! tau_above above the join), so the flux leaving the block below, F0, is its
+  ! bottom flux. The solve covers the cells from the bottom up to the last
+  ! one of the contiguous run with T < T_max and a table opacity (above:
+  ! hot gas, whose Rosseland mean is mostly electron scattering, not
+  ! absorption); its top condition as grey_column's (optical depth tau_above
+  ! above that cell); above it the flux streams freely (A F constant, no
+  ! heating). Implicit coupling as grey_column (sc: the cells' step factors).
+  ! Out: q_rad(0:n_c) the radiative flux at the faces, Qrad(1:n_c) the heating.
+  subroutine grey_atm_column(dt, sc, F0, rho, T, cv, lnrho, lnT, tau_above, q_rad, Qrad)
+    real(dp), intent(in) :: dt, sc(1:), F0, tau_above, rho(1:), T(1:), cv(1:), lnrho(1:), lnT(1:)
+    real(dp), intent(out) :: q_rad(0:), Qrad(1:)
+    real(dp), parameter :: T_max = 2.0e4_dp
+    real(dp) :: kr(n_c), dtf(n_c), J(n_c), rcv(n_c), top_coef
+    integer :: i, n_act
+    q_rad = 0.0_dp
+    Qrad = 0.0_dp
+    n_act = 0
+    do i = 1, n_c
+      if (T(i) >= T_max) exit
+      kr(i) = kappa_ln(lnrho(i), lnT(i))*rho(i)
+      if (kr(i) <= 0.0_dp) exit
+      rcv(i) = rho(i)*cv(i)/sc(i)
+      n_act = i
+    end do
+    if (n_act >= 1) then
+      dtf = 0.0_dp
+      do i = 1, n_act - 1
+        dtf(i) = (r_c(i+1) - r_c(i))/(0.5_dp*(1.0_dp/kr(i) + 1.0_dp/kr(i+1)))
+      end do
+      top_coef = 4.0_dp*pi/(3.0_dp*(tau_above + kr(n_act)*(r_f(n_act) - r_c(n_act))) + 2.0_dp)
+      call grey_core(n_act, area_f(0:n_act), vol_c(1:n_act), kr(1:n_act), dtf(1:n_act), T(1:n_act), &
+          rcv(1:n_act), dt, F0, top_coef, q_rad(0:n_act), J(1:n_act), Qrad(1:n_act))
+    else
+      q_rad(0) = F0
+    end if
+    do i = n_act + 1, n_c
+      q_rad(i) = q_rad(n_act)*area_f(n_act)/area_f(i)
+    end do
+  end subroutine grey_atm_column
 
   ! The cooling arrays of the m cells o+1..o+m (as bg_view)
   subroutine tr_view(o, m)
