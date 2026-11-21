@@ -30,7 +30,8 @@ FFLAGS = $(ARBOR_FFLAGS) $(LONGLINES) $(ARBOR_INC) -I$(HHE)/mod $(call moddir,$(
 LIBS   = $(ARBOR_LIB) $(HHE)/libeos_hhe.a $(OMP)
 
 MODS = kinds_mod const_mod opacity_table_mod mlt_mod grey_rt_mod vmath_mod cz3d_params_mod cz3d_bg_mod \
-       cz3d_transport_mod radiative_loss_mod cztr3d_atm_mod pfss_mod cz3d_app_mod
+       cz3d_transport_mod radiative_loss_mod cztr3d_atm_mod pfss_mod cz3d_app_mod \
+       cz3d_setup_smod cz3d_diag_smod cz3d_synth_smod
 
 # array exp, expm1, log: Apple's Accelerate on macOS, plain loops elsewhere
 ifeq ($(shell uname),Darwin)
@@ -75,6 +76,10 @@ $(BUILD)/cztr3d_atm_mod.o: src/cztr3d_atm_mod.f90 $(BUILD)/cz3d_params_mod.o $(B
 $(BUILD)/pfss_mod.o: src/pfss_mod.f90 $(BUILD)/kinds_mod.o
 	$(ARBOR_FC) $(FFLAGS) -c $< -o $@
 $(BUILD)/cz3d_app_mod.o: src/cz3d_app_mod.f90 $(BUILD)/cz3d_params_mod.o $(BUILD)/cz3d_transport_mod.o $(BUILD)/cztr3d_atm_mod.o $(BUILD)/pfss_mod.o
+	$(ARBOR_FC) $(FFLAGS) -c $< -o $@
+# cz3d_app_mod's submodules (setup, diagnostics, synthetic observables): they
+# need the parent's .mod/.smod; editing one recompiles only it
+$(BUILD)/cz3d_setup_smod.o $(BUILD)/cz3d_diag_smod.o $(BUILD)/cz3d_synth_smod.o: $(BUILD)/%.o: src/%.f90 $(BUILD)/cz3d_app_mod.o
 	$(ARBOR_FC) $(FFLAGS) -c $< -o $@
 
 $(EXE): src/cz3d_main.f90 $(OBJS)
