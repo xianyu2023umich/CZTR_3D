@@ -268,6 +268,26 @@ module cz3d_params_mod
   ! smoothing step into a large B_r change at the join (tested 2026-11-20); and
   ! not tapered with depth (d_r of the smoothing weight makes div B ~ |B|/dh)
   real(dp) :: b_smooth_cells = 0.0_dp
+
+  ! --- synthetic EUV images (use_atmosphere), made in the run (see euv_write):
+  ! euv_dt > 0: every euv_dt s of model time (the first at the run's first
+  ! step); euv_at_end: also at the end (e.g. a zero-step run from a restart).
+  ! For each view v = 1..euv_n_view an observer at infinity in the direction
+  ! (euv_lon_deg(v), euv_lat_deg(v)) (the global frame's longitude and
+  ! latitude), solar north up, x along increasing longitude at the
+  ! sub-observer point. The image is euv_npix^2 pixels over
+  ! [-euv_fov_rsun, euv_fov_rsun]^2 (in R_sun, from the Sun's centre). Each
+  ! atmosphere cell adds n_e n_H K_c(T) dV / A_pixel for each channel c of
+  ! euv_table (K: DN cm^5 s^-1 per AIA pixel, per n_e n_H; tools/aia_response.py),
+  ! split into sub-points about half a pixel apart; points hidden behind the
+  ! sphere at the join are left out. Image values: DN s^-1 per AIA pixel.
+  ! Output: out_dir/euv_NNNNNNNN.bin (tools/euv_plot.py reads it)
+  real(dp) :: euv_dt = 0.0_dp, euv_fov_rsun = 1.3_dp
+  logical :: euv_at_end = .false.
+  integer, parameter :: euv_max_view = 8
+  integer :: euv_n_view = 1, euv_npix = 512
+  real(dp) :: euv_lon_deg(euv_max_view) = 0.0_dp, euv_lat_deg(euv_max_view) = 0.0_dp
+  character(len=256) :: euv_table = 'data/aia_response.dat'
   real(dp) :: glm_cfl_frac = 0.8_dp
   ! walls: 'conductor' (B_r = 0, B_h mirrored) or 'radial' (B_h = 0, B_r
   ! mirrored: the field vertical at the wall); Hotta et al. 2014: conductor at
@@ -567,7 +587,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ b_smooth_cells, test_freeze_b, b_eta_dr, b_eta_cs, test_b_diff_only, b_diff_form, b_diffusion_h, b_diff_limiter, cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ euv_dt, euv_at_end, euv_n_view, euv_npix, euv_lon_deg, euv_lat_deg, euv_fov_rsun, euv_table, b_smooth_cells, test_freeze_b, b_eta_dr, b_eta_cs, test_b_diff_only, b_diff_form, b_diffusion_h, b_diff_limiter, cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -615,6 +635,9 @@ contains
     if (use_B .and. use_diffusion .and. b_diff_form == 'resistive' .and. .not. si_radial) &
         call arbor_abort("b_diff_form = 'resistive' needs si_radial (its radial term is solved per column)")
     if (b_eta_dr > 0.0_dp .and. b_diff_form /= 'resistive') call arbor_abort("b_eta_dr needs b_diff_form = 'resistive'")
+    if ((euv_dt > 0.0_dp .or. euv_at_end) .and. .not. use_atmosphere) call arbor_abort('euv_dt/euv_at_end need use_atmosphere')
+    if (euv_n_view < 1 .or. euv_n_view > euv_max_view) call arbor_abort('euv_n_view must be 1 .. euv_max_view (8)')
+    if (euv_npix < 8 .or. euv_fov_rsun <= 1.0_dp) call arbor_abort('euv_npix must be >= 8 and euv_fov_rsun > 1')
     if (b_diff_limiter /= 'minmod' .and. b_diff_limiter /= 'mc') call arbor_abort('b_diff_limiter must be minmod or mc')
     if (si_alfven .and. .not. (si_radial .and. use_B)) call arbor_abort('si_alfven needs si_radial and use_B')
     if (si_radial .and. freeze_side /= 'none') call arbor_abort('si_radial needs freeze_side = none')

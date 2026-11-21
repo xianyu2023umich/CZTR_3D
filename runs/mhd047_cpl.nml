@@ -16,6 +16,9 @@
 ! Watch: log.txt (dt, Mach, max|B|, div B), footpoints.txt, the TR heights,
 ! the shell dumps, the box (on the Yin corner where the corner force sat).
 ! A restart every 20 min of model time (MHD + atmosphere: ~7 GB each).
+! Synthetic AIA images every 10 min of model time from 4 sides (lon 0, 90,
+! 180, 270 at the equator; 512^2, +-1.3 R_sun; data/aia_response.dat):
+! out_dir/euv_*.bin, plot with tools/euv_plot.py.
 !   sbatch -N 6 --ntasks-per-node 96 -t 04:00:00 tools/job.stampede3_spr4 runs/mhd047_cpl.nml
 &cz3d
   grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
@@ -44,5 +47,7 @@
   n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 1200.0
   dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
   box_lat_deg = -44.0, box_lon_deg = 134.0, box_radius_deg = 3.0, box_z_km = -2000.0, 30000.0, box_every = 500
+  euv_dt = 600.0, euv_n_view = 4, euv_lon_deg = 0.0, 90.0, 180.0, 270.0, euv_lat_deg = 0.0, 0.0, 0.0, 0.0
+  euv_npix = 512, euv_fov_rsun = 1.3, euv_table = 'data/aia_response.dat'
   wall_time_margin = 900.0
 /

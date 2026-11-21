@@ -121,6 +121,10 @@ module cz3d_app_mod
   ! Coriolis impulse since), the impulse accumulated since the last
   ! correction, the next correction time
   real(dp) :: lz_ref = 0.0_dp, lz_imp = 0.0_dp, t_next_lzc = 0.0_dp
+  ! synthetic EUV (euv_write): the response table (uniform log10 T rows) and the schedule
+  real(dp), allocatable :: euv_K(:,:), euv_lgT(:)
+  integer, allocatable :: euv_ch(:)
+  real(dp) :: t_next_euv = -huge(1.0_dp)
   logical :: lz_ref_set = .false.
 
   ! ---- energy budget per radial shell (dt_budget > 0) ----
@@ -174,7 +178,7 @@ module cz3d_app_mod
   integer, parameter :: nAcc = 18
   real(dp), allocatable :: bgf_r(:)
 
-  public :: cz_smooth_b, cz_columns_to_ranks, cz_import_cz, cz_match_base, cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
+  public :: euv_write, cz_smooth_b, cz_columns_to_ranks, cz_import_cz, cz_match_base, cz_seed_pfss, max_mach_report, cz_n_var, cz_field_from_hydro, export_state_write, import_open, import_max_level, import_criterion, import_meta, cz_setup, cz_transport_all, cz_log, cz_profile, wall_bc, state_checksum, budget_start, dump_shells_write
 
 contains
 
@@ -4264,6 +4268,15 @@ contains
     if (box_radius_deg > 0.0_dp .and. box_every > 0) then
       if (mod(iStep, box_every) == 0) call box_write(iStep, t)
     end if
+    if (euv_dt > 0.0_dp) then
+      if (t_next_euv == -huge(1.0_dp)) t_next_euv = t
+      if (t >= t_next_euv) then
+        call euv_write(iStep, t)
+        do while (t_next_euv <= t)
+          t_next_euv = t_next_euv + euv_dt
+        end do
+      end if
+    end if
     call nan_check(iStep, t)
     if (lz_correct_steps > 0 .or. lz_correct_dt > 0.0_dp) then
       if (lz_correct_steps > 0) then
@@ -4369,6 +4382,181 @@ contains
 
   ! Box output (box_radius_deg > 0; see cz3d_params_mod): the cells near a
   ! point (e.g. where a run failed), full state, one file per rank
+  ! Synthetic EUV images (euv_dt, euv_at_end; see cz3d_params_mod). The
+  ! response table (euv_table, read once): '#' comment lines, then
+  ! "n_T n_channel", the channel wavelengths [A], then n_T rows
+  ! "log10 T  K_1 .. K_n" (uniform in log10 T; K [DN cm^5 s^-1 pix^-1] per
+  ! n_e n_H). Each atmosphere cell's n_e n_H K(T) dV is split over
+  ! n_r x n_theta x n_phi sub-points (about half a pixel apart, at most 8 per
+  ! direction), each sub-point weighted by its Yin-Yang core cover (1/2 where
+  ! both patches' cores hold it) and dropped when the sphere at the join
+  ! hides it from the observer. The images are summed over the ranks and
+  ! written by the root: out_dir/euv_NNNNNNNN.bin, stream: int32 n_view,
+  ! n_channel, n_pix; real64 t, fov [R_sun], lon(n_view), lat(n_view) [deg];
+  ! int32 channels(n_channel); real32 image(n_pix, n_pix, n_channel, n_view)
+  ! (x fastest: increasing longitude at the sub-observer point; y: north;
+  ! pixel (1,1) centred at (-fov + pix/2, -fov + pix/2); cloud-in-cell deposit).
+  subroutine euv_write(iStep, t)
+    use const_mod, only: Rsun
+    use radiative_loss_mod, only: N_H_per_gram_global
+    use eos_table, only: F_LNNE
+    use mpi_f08, only: MPI_SUM, MPI_Reduce
+    use iso_fortran_env, only: int32, real32
+    integer, intent(in) :: iStep
+    real(dp), intent(in) :: t
+    real(dp), allocatable :: img(:,:,:,:), em(:)
+    real(dp) :: d(3, euv_max_view), ex(3, euv_max_view), ey(3, euv_max_view), lo, la, pix, rocc, fov, &
+        out(n_field), rho, Tc, lgT, f, w, dv, rc, dth, dph, th0, ph0, ra, rb, rs, ths, phs, p(3), q(3), u, v, &
+        sdot, rho2, th2, ph2, ext, t0, mx, fx, fy
+    real(dp), allocatable :: rsub(:), thsub(:), phsub(:)
+    integer :: nch, nT, jb, ib, i, j, k, m, iv, ir, it, ip, nsr, nst, nsp, ix, iy, jx, jy, u_, n_img
+    character(len=300) :: name
+    character(len=200) :: msg
+    t0 = arbor_wtime()
+    if (.not. allocated(euv_K)) call euv_load()
+    nch = size(euv_ch)
+    nT = size(euv_lgT)
+    allocate(img(euv_npix, euv_npix, nch, euv_n_view), em(nch), rsub(8), thsub(8), phsub(8))
+    img = 0.0_dp
+    do iv = 1, euv_n_view
+      lo = euv_lon_deg(iv)*pi/180.0_dp;  la = euv_lat_deg(iv)*pi/180.0_dp
+      d(:, iv) = [cos(la)*cos(lo), cos(la)*sin(lo), sin(la)]                ! towards the observer
+      ex(:, iv) = [-sin(lo), cos(lo), 0.0_dp]                                ! increasing longitude
+      ey(:, iv) = [-sin(la)*cos(lo), -sin(la)*sin(lo), cos(la)]              ! north
+    end do
+    fov = euv_fov_rsun*Rsun
+    pix = 2.0_dp*fov/euv_npix
+    call cz_unbind()
+    rocc = r_f(k_join)
+    do jb = 1, nBlock
+      ib = iBlockList_I(jb)
+      call cz_bind(ib)
+      if (r_off + nb(1) <= k_join) cycle
+      associate (th => Metric_DB(2, ib)%X_I, dth_ => Metric_DB(2, ib)%Dx_I, ph => Metric_DB(3, ib)%X_I, &
+                 dph_ => Metric_DB(3, ib)%Dx_I, vth => Metric_DB(2, ib)%Vol_I, vph => Metric_DB(3, ib)%Vol_I)
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          do i = 1, nb(1)
+            if (r_off + i <= k_join) cycle
+            rho = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            call eos_eval(tab, rho, s0(i) + State_GVB(i, j, k, s1_, ib), out)
+            lgT = out(F_LNT)/log(10.0_dp)
+            if (lgT <= euv_lgT(1) .or. lgT >= euv_lgT(nT)) cycle
+            f = (lgT - euv_lgT(1))/(euv_lgT(2) - euv_lgT(1))
+            m = min(nT - 1, int(f) + 1)
+            f = f - (m - 1)
+            ra = r_f(i-1);  rb = r_f(i)
+            dv = (rb**3 - ra**3)/3.0_dp*vth(j)*vph(k)
+            em = exp(out(F_LNNE))*N_H_per_gram_global*rho*((1.0_dp - f)*euv_K(m, :) + f*euv_K(m+1, :))*dv/pix**2
+            if (maxval(em) <= 0.0_dp) cycle
+            rc = r_c(i);  dth = dth_(j);  dph = dph_(k);  th0 = th(j);  ph0 = ph(k)
+            ! the centre's projection: skip the cell when it lies outside every image by more than its size
+            p = rc*[sin(th0)*cos(ph0), sin(th0)*sin(ph0), cos(th0)]
+            if (Key_IB(KP, ib) == 2) p = yy_cart(p)
+            ext = (rb - ra) + rc*(dth + dph)
+            if (all([(max(abs(dot_product(p, ex(:, iv))), abs(dot_product(p, ey(:, iv)))) > fov + ext, &
+                iv = 1, euv_n_view)])) cycle
+            nsr = min(8, max(1, ceiling(2.0_dp*(rb - ra)/pix)))
+            nst = min(8, max(1, ceiling(2.0_dp*rc*dth/pix)))
+            nsp = min(8, max(1, ceiling(2.0_dp*rc*sin(th0)*dph/pix)))
+            do ir = 1, nsr
+              rsub(ir) = ra + (ir - 0.5_dp)*(rb - ra)/nsr
+            end do
+            do it = 1, nst
+              thsub(it) = th0 + ((it - 0.5_dp)/nst - 0.5_dp)*dth
+            end do
+            do ip = 1, nsp
+              phsub(ip) = ph0 + ((ip - 0.5_dp)/nsp - 0.5_dp)*dph
+            end do
+            em = em/real(nsr*nst*nsp, dp)
+            do ip = 1, nsp
+              phs = phsub(ip)
+              do it = 1, nst
+                ths = thsub(it)
+                w = 1.0_dp
+                if (.not. yy_core(ths, phs)) cycle
+                call yy_angles(ths, phs, th2, ph2)
+                if (yy_core(th2, ph2)) w = 0.5_dp
+                q = [sin(ths)*cos(phs), sin(ths)*sin(phs), cos(ths)]
+                if (Key_IB(KP, ib) == 2) q = yy_cart(q)
+                do ir = 1, nsr
+                  rs = rsub(ir)
+                  p = rs*q
+                  do iv = 1, euv_n_view
+                    u = dot_product(p, ex(:, iv));  v = dot_product(p, ey(:, iv))
+                    if (abs(u) >= fov .or. abs(v) >= fov) cycle
+                    sdot = dot_product(p, d(:, iv))
+                    rho2 = rs*rs - sdot*sdot
+                    if (rho2 < rocc*rocc) then
+                      if (sdot < sqrt(rocc*rocc - rho2)) cycle      ! behind the sphere at the join
+                    end if
+                    ! cloud in cell: shared over the 4 nearest pixel centres
+                    fx = (u + fov)/pix + 0.5_dp
+                    fy = (v + fov)/pix + 0.5_dp
+                    ix = floor(fx);  iy = floor(fy)
+                    fx = fx - ix;  fy = fy - iy
+                    do jy = 0, 1
+                      if (iy + jy < 1 .or. iy + jy > euv_npix) cycle
+                      do jx = 0, 1
+                        if (ix + jx < 1 .or. ix + jx > euv_npix) cycle
+                        img(ix+jx, iy+jy, :, iv) = img(ix+jx, iy+jy, :, iv) &
+                            + w*merge(fx, 1.0_dp - fx, jx == 1)*merge(fy, 1.0_dp - fy, jy == 1)*em
+                      end do
+                    end do
+                  end do
+                end do
+              end do
+            end do
+          end do
+        end do
+      end do
+      end associate
+    end do
+    call cz_unbind()
+    n_img = size(img)
+    if (is_root) then
+      call MPI_Reduce(MPI_IN_PLACE, img, n_img, MPI_DOUBLE_PRECISION, MPI_SUM, 0, MPI_COMM_WORLD)
+    else
+      call MPI_Reduce(img, img, n_img, MPI_DOUBLE_PRECISION, MPI_SUM, 0, MPI_COMM_WORLD)
+    end if
+    if (.not. is_root) return
+    write(name, '(A,A,I8.8,A)') trim(out_dir), '/euv_', iStep, '.bin'
+    open(newunit=u_, file=trim(name), access='stream', form='unformatted', status='replace', action='write')
+    write(u_) int(euv_n_view, int32), int(nch, int32), int(euv_npix, int32), t, euv_fov_rsun, &
+        euv_lon_deg(1:euv_n_view), euv_lat_deg(1:euv_n_view), int(euv_ch, int32), real(img, real32)
+    close(u_)
+    mx = maxval(img(:, :, 1, 1))
+    write(msg, '(A,I0,A,ES11.4,A,I0,A,ES10.3,A,F7.2,A)') '  euv: step ', iStep, ', t ', t, ' s: ', euv_n_view, &
+        ' view(s); max (first channel, first view) ', mx, ' DN/s/pix; ', arbor_wtime() - t0, ' s'
+    call arbor_print(msg)
+  contains
+    logical function yy_core(t_, p_)
+      real(dp), intent(in) :: t_, p_
+      yy_core = t_ >= 0.25_dp*pi .and. t_ <= 0.75_dp*pi .and. abs(p_) <= 0.75_dp*pi
+    end function yy_core
+  end subroutine euv_write
+
+  ! euv_table: the AIA temperature responses (see euv_write)
+  subroutine euv_load()
+    integer :: u, nT, nch, m, ios
+    character(len=512) :: line
+    open(newunit=u, file=trim(euv_table), status='old', action='read', iostat=ios)
+    if (ios /= 0) call arbor_abort('euv: cannot open euv_table '//trim(euv_table))
+    do
+      read(u, '(A)') line
+      if (len_trim(line) > 0 .and. line(1:1) /= '#') exit
+    end do
+    read(line, *) nT, nch
+    allocate(euv_lgT(nT), euv_K(nT, nch), euv_ch(nch))
+    read(u, *) euv_ch
+    do m = 1, nT
+      read(u, *) euv_lgT(m), euv_K(m, :)
+    end do
+    close(u)
+    if (nT < 2 .or. maxval(abs((euv_lgT(2:) - euv_lgT(:nT-1)) - (euv_lgT(2) - euv_lgT(1)))) > 1.0e-6_dp) &
+        call arbor_abort('euv: euv_table must be uniform in log10 T')
+  end subroutine euv_load
+
   subroutine box_write(iStep, t)
     use cztr3d_atm_mod, only: Qloss_B, Qheat_B
     integer, intent(in) :: iStep
