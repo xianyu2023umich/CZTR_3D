@@ -4386,16 +4386,24 @@ contains
   ! response table (euv_table, read once): '#' comment lines, then
   ! "n_T n_channel", the channel wavelengths [A], then n_T rows
   ! "log10 T  K_1 .. K_n" (uniform in log10 T; K [DN cm^5 s^-1 pix^-1] per
-  ! n_e n_H). Each atmosphere cell's n_e n_H K(T) dV is split over
-  ! n_r x n_theta x n_phi sub-points (about half a pixel apart, at most 8 per
-  ! direction), each sub-point weighted by its Yin-Yang core cover (1/2 where
-  ! both patches' cores hold it) and dropped when the sphere at the join
-  ! hides it from the observer. The images are summed over the ranks and
-  ! written by the root: out_dir/euv_NNNNNNNN.bin, stream: int32 n_view,
-  ! n_channel, n_pix; real64 t, fov [R_sun], lon(n_view), lat(n_view) [deg];
-  ! int32 channels(n_channel); real32 image(n_pix, n_pix, n_channel, n_view)
-  ! (x fastest: increasing longitude at the sub-observer point; y: north;
-  ! pixel (1,1) centred at (-fov + pix/2, -fov + pix/2); cloud-in-cell deposit).
+  ! n_e n_H). The emission n_e n_H K(T) is sampled at sub-points of each
+  ! atmosphere cell, uniform in (r, theta, phi): per direction
+  ! ceil(3 extent/pixel) points (at most 12 across, 32 radially), radially
+  ! also ceil(dlogT/0.02)
+  ! where log10 T changes by dlogT to a radial neighbour (at most 32), so the
+  ! transition region is integrated through. At each sub-point log10 T and
+  ! ln(n_e n_H) are trilinear between the cell centres (one ghost layer, the
+  ! state's ghosts filled first), each carries the cell volume / its count.
+  ! A sub-point is weighted by its Yin-Yang core cover (1/2 where both
+  ! patches' cores hold it) and dropped when the sphere at the join hides it
+  ! from the observer; it is deposited as a square of side its horizontal
+  ! spacing, split over the pixels it overlaps (so a cell's points tile the
+  ! image without the moire a point deposit gives). The images are summed over the ranks and written by the root:
+  ! out_dir/euv_NNNNNNNN.bin, stream: int32 n_view, n_channel, n_pix; real64
+  ! t, fov [R_sun], lon(n_view), lat(n_view) [deg]; int32 channels(n_channel);
+  ! real32 image(n_pix, n_pix, n_channel, n_view) (x fastest: increasing
+  ! longitude at the sub-observer point; y: north; pixel (1,1) centred at
+  ! (-fov + pix/2, -fov + pix/2)).
   subroutine euv_write(iStep, t)
     use const_mod, only: Rsun
     use radiative_loss_mod, only: N_H_per_gram_global
@@ -4404,19 +4412,23 @@ contains
     use iso_fortran_env, only: int32, real32
     integer, intent(in) :: iStep
     real(dp), intent(in) :: t
-    real(dp), allocatable :: img(:,:,:,:), em(:)
+    real(dp), parameter :: dlt_sub = 0.02_dp
+    real(dp), allocatable :: img(:,:,:,:), em(:), lt(:,:,:), ln(:,:,:)
     real(dp) :: d(3, euv_max_view), ex(3, euv_max_view), ey(3, euv_max_view), lo, la, pix, rocc, fov, &
-        out(n_field), rho, Tc, lgT, f, w, dv, rc, dth, dph, th0, ph0, ra, rb, rs, ths, phs, p(3), q(3), u, v, &
-        sdot, rho2, th2, ph2, ext, t0, mx, fx, fy
-    real(dp), allocatable :: rsub(:), thsub(:), phsub(:)
-    integer :: nch, nT, jb, ib, i, j, k, m, iv, ir, it, ip, nsr, nst, nsp, ix, iy, jx, jy, u_, n_img
+        out(n_field), rho, lgT, f, w, dvs, rc, dth, dph, ra, rb, rs, ths, phs, p(3), q(3), u, v, &
+        sdot, rho2, th2, ph2, ext, t0, mx, fx, fy, wr, wt, wp, ltp, lnp, dlt, lt_lo, lt_hi, hp, wx(2), wy(2)
+    real(dp) :: rsub(32), thsub(12), phsub(12)
+    integer :: nch, nT, jb, ib, i, j, k, m, iv, ir, it, ip, nsr, nst, nsp, ix, iy, jx, jy, u_, n_img, &
+        i0, j0, k0
     character(len=300) :: name
     character(len=200) :: msg
     t0 = arbor_wtime()
     if (.not. allocated(euv_K)) call euv_load()
     nch = size(euv_ch)
     nT = size(euv_lgT)
-    allocate(img(euv_npix, euv_npix, nch, euv_n_view), em(nch), rsub(8), thsub(8), phsub(8))
+    lt_lo = euv_lgT(1);  lt_hi = euv_lgT(nT)
+    allocate(img(euv_npix, euv_npix, nch, euv_n_view), em(nch))
+    allocate(lt(0:nb(1)+1, 0:nb(2)+1, 0:nb(3)+1), ln(0:nb(1)+1, 0:nb(2)+1, 0:nb(3)+1))
     img = 0.0_dp
     do iv = 1, euv_n_view
       lo = euv_lon_deg(iv)*pi/180.0_dp;  la = euv_lat_deg(iv)*pi/180.0_dp
@@ -4426,6 +4438,7 @@ contains
     end do
     fov = euv_fov_rsun*Rsun
     pix = 2.0_dp*fov/euv_npix
+    call arbor_fill_ghosts(State_GVB, n_ghost=1, faces_only=.false.)
     call cz_unbind()
     rocc = r_f(k_join)
     do jb = 1, nBlock
@@ -4434,53 +4447,73 @@ contains
       if (r_off + nb(1) <= k_join) cycle
       associate (th => Metric_DB(2, ib)%X_I, dth_ => Metric_DB(2, ib)%Dx_I, ph => Metric_DB(3, ib)%X_I, &
                  dph_ => Metric_DB(3, ib)%Dx_I, vth => Metric_DB(2, ib)%Vol_I, vph => Metric_DB(3, ib)%Vol_I)
+      if (lbound(th, 1) > 0 .or. ubound(th, 1) < nb(2) + 1 .or. lbound(ph, 1) > 0 .or. ubound(ph, 1) < nb(3) + 1) &
+          call arbor_abort('euv_write: the block metric has no ghost centres')
+      ! log10 T and ln(n_e n_H) at the cell centres and one ghost layer
+      do k = 0, nb(3) + 1
+        do j = 0, nb(2) + 1
+          do i = 0, nb(1) + 1
+            rho = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            call eos_eval(tab, max(rho, 1.0e-30_dp), s0(i) + State_GVB(i, j, k, s1_, ib), out)
+            lt(i, j, k) = out(F_LNT)/log(10.0_dp)
+            ln(i, j, k) = out(F_LNNE) + log(N_H_per_gram_global*max(rho, 1.0e-30_dp))
+          end do
+        end do
+      end do
       do k = 1, nb(3)
         do j = 1, nb(2)
           do i = 1, nb(1)
             if (r_off + i <= k_join) cycle
-            rho = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
-            call eos_eval(tab, rho, s0(i) + State_GVB(i, j, k, s1_, ib), out)
-            lgT = out(F_LNT)/log(10.0_dp)
-            if (lgT <= euv_lgT(1) .or. lgT >= euv_lgT(nT)) cycle
-            f = (lgT - euv_lgT(1))/(euv_lgT(2) - euv_lgT(1))
-            m = min(nT - 1, int(f) + 1)
-            f = f - (m - 1)
+            ! nothing in the table's range in the cell or its neighbours: no emission
+            if (maxval(lt(i-1:i+1, j-1:j+1, k-1:k+1)) <= lt_lo .or. minval(lt(i-1:i+1, j-1:j+1, k-1:k+1)) >= lt_hi) cycle
             ra = r_f(i-1);  rb = r_f(i)
-            dv = (rb**3 - ra**3)/3.0_dp*vth(j)*vph(k)
-            em = exp(out(F_LNNE))*N_H_per_gram_global*rho*((1.0_dp - f)*euv_K(m, :) + f*euv_K(m+1, :))*dv/pix**2
-            if (maxval(em) <= 0.0_dp) cycle
-            rc = r_c(i);  dth = dth_(j);  dph = dph_(k);  th0 = th(j);  ph0 = ph(k)
+            rc = r_c(i);  dth = dth_(j);  dph = dph_(k)
             ! the centre's projection: skip the cell when it lies outside every image by more than its size
-            p = rc*[sin(th0)*cos(ph0), sin(th0)*sin(ph0), cos(th0)]
+            p = rc*[sin(th(j))*cos(ph(k)), sin(th(j))*sin(ph(k)), cos(th(j))]
             if (Key_IB(KP, ib) == 2) p = yy_cart(p)
             ext = (rb - ra) + rc*(dth + dph)
             if (all([(max(abs(dot_product(p, ex(:, iv))), abs(dot_product(p, ey(:, iv)))) > fov + ext, &
                 iv = 1, euv_n_view)])) cycle
-            nsr = min(8, max(1, ceiling(2.0_dp*(rb - ra)/pix)))
-            nst = min(8, max(1, ceiling(2.0_dp*rc*dth/pix)))
-            nsp = min(8, max(1, ceiling(2.0_dp*rc*sin(th0)*dph/pix)))
+            dlt = max(abs(lt(i+1, j, k) - lt(i, j, k)), abs(lt(i, j, k) - lt(i-1, j, k)))
+            nsr = min(32, max(1, ceiling(3.0_dp*(rb - ra)/pix), ceiling(dlt/dlt_sub)))
+            nst = min(12, max(1, ceiling(3.0_dp*rc*dth/pix)))
+            nsp = min(12, max(1, ceiling(3.0_dp*rc*sin(th(j))*dph/pix)))
             do ir = 1, nsr
               rsub(ir) = ra + (ir - 0.5_dp)*(rb - ra)/nsr
             end do
             do it = 1, nst
-              thsub(it) = th0 + ((it - 0.5_dp)/nst - 0.5_dp)*dth
+              thsub(it) = th(j) + ((it - 0.5_dp)/nst - 0.5_dp)*dth
             end do
             do ip = 1, nsp
-              phsub(ip) = ph0 + ((ip - 0.5_dp)/nsp - 0.5_dp)*dph
+              phsub(ip) = ph(k) + ((ip - 0.5_dp)/nsp - 0.5_dp)*dph
             end do
-            em = em/real(nsr*nst*nsp, dp)
+            dvs = (rb**3 - ra**3)/3.0_dp*vth(j)*vph(k)/real(nsr*nst*nsp, dp)/pix**2
+            hp = min(1.0_dp, rc*sqrt(dth*sin(th(j))*dph/real(nst*nsp, dp))/pix)   ! the horizontal spacing [pixels]
             do ip = 1, nsp
               phs = phsub(ip)
+              k0 = merge(k - 1, k, phs < ph(k))
+              wp = (phs - ph(k0))/(ph(k0+1) - ph(k0))
               do it = 1, nst
                 ths = thsub(it)
                 w = 1.0_dp
                 if (.not. yy_core(ths, phs)) cycle
                 call yy_angles(ths, phs, th2, ph2)
                 if (yy_core(th2, ph2)) w = 0.5_dp
+                j0 = merge(j - 1, j, ths < th(j))
+                wt = (ths - th(j0))/(th(j0+1) - th(j0))
                 q = [sin(ths)*cos(phs), sin(ths)*sin(phs), cos(ths)]
                 if (Key_IB(KP, ib) == 2) q = yy_cart(q)
                 do ir = 1, nsr
                   rs = rsub(ir)
+                  i0 = merge(i - 1, i, rs < r_c(i))
+                  wr = (rs - r_c(i0))/(r_c(i0+1) - r_c(i0))
+                  ltp = tri(lt)
+                  if (ltp <= lt_lo .or. ltp >= lt_hi) cycle
+                  lnp = tri(ln)
+                  f = (ltp - lt_lo)/(euv_lgT(2) - lt_lo)
+                  m = min(nT - 1, int(f) + 1)
+                  f = f - (m - 1)
+                  em = w*exp(lnp)*((1.0_dp - f)*euv_K(m, :) + f*euv_K(m+1, :))*dvs
                   p = rs*q
                   do iv = 1, euv_n_view
                     u = dot_product(p, ex(:, iv));  v = dot_product(p, ey(:, iv))
@@ -4490,17 +4523,18 @@ contains
                     if (rho2 < rocc*rocc) then
                       if (sdot < sqrt(rocc*rocc - rho2)) cycle      ! behind the sphere at the join
                     end if
-                    ! cloud in cell: shared over the 4 nearest pixel centres
-                    fx = (u + fov)/pix + 0.5_dp
-                    fy = (v + fov)/pix + 0.5_dp
+                    ! the sub-point as a square of side hp (its spacing, in pixels), split
+                    ! over the pixels it overlaps (at most 2 x 2; pixel n covers [n-1, n])
+                    fx = (u + fov)/pix - 0.5_dp*hp
+                    fy = (v + fov)/pix - 0.5_dp*hp
                     ix = floor(fx);  iy = floor(fy)
-                    fx = fx - ix;  fy = fy - iy
-                    do jy = 0, 1
-                      if (iy + jy < 1 .or. iy + jy > euv_npix) cycle
-                      do jx = 0, 1
-                        if (ix + jx < 1 .or. ix + jx > euv_npix) cycle
-                        img(ix+jx, iy+jy, :, iv) = img(ix+jx, iy+jy, :, iv) &
-                            + w*merge(fx, 1.0_dp - fx, jx == 1)*merge(fy, 1.0_dp - fy, jy == 1)*em
+                    wx(1) = min(1.0_dp, (ix + 1 - fx)/hp);  wx(2) = 1.0_dp - wx(1)
+                    wy(1) = min(1.0_dp, (iy + 1 - fy)/hp);  wy(2) = 1.0_dp - wy(1)
+                    do jy = 1, 2
+                      if (wy(jy) <= 0.0_dp .or. iy + jy < 1 .or. iy + jy > euv_npix) cycle
+                      do jx = 1, 2
+                        if (wx(jx) <= 0.0_dp .or. ix + jx < 1 .or. ix + jx > euv_npix) cycle
+                        img(ix+jx, iy+jy, :, iv) = img(ix+jx, iy+jy, :, iv) + wx(jx)*wy(jy)*em
                       end do
                     end do
                   end do
@@ -4534,6 +4568,14 @@ contains
       real(dp), intent(in) :: t_, p_
       yy_core = t_ >= 0.25_dp*pi .and. t_ <= 0.75_dp*pi .and. abs(p_) <= 0.75_dp*pi
     end function yy_core
+    ! trilinear between the centres (i0..i0+1, j0..j0+1, k0..k0+1), weights wr, wt, wp
+    real(dp) function tri(a)
+      real(dp), intent(in) :: a(0:, 0:, 0:)
+      tri = (1.0_dp - wp)*((1.0_dp - wt)*((1.0_dp - wr)*a(i0, j0, k0) + wr*a(i0+1, j0, k0)) &
+                         + wt*((1.0_dp - wr)*a(i0, j0+1, k0) + wr*a(i0+1, j0+1, k0))) &
+          + wp*((1.0_dp - wt)*((1.0_dp - wr)*a(i0, j0, k0+1) + wr*a(i0+1, j0, k0+1)) &
+                + wt*((1.0_dp - wr)*a(i0, j0+1, k0+1) + wr*a(i0+1, j0+1, k0+1)))
+    end function tri
   end subroutine euv_write
 
   ! euv_table: the AIA temperature responses (see euv_write)
