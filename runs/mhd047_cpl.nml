@@ -1,34 +1,27 @@
-! The 'mix' start at 0.47 deg (2026-11-20): the coupled HD atmosphere of
-! runs/hd047_cpl.nml (its last restart) with mhd5's CZ under it:
-! - import_cz_on_restart: the CZ blocks (below the join) overwritten from the
-!   0.47 deg mhd5 export, all variables (rho1, v, s1, B): mhd5's convection
-!   and its saturated field together (the HD run's CZ flows would not hold
-!   mhd5's field);
-! - atm_match_on_restart: each column's lower atmosphere (below 1.2 Mm)
-!   pressure-matched to its new CZ top;
+! Field chain at 0.47 deg (2026-11-20), step 2 of 2: the CZ of
+! runs/mhd047_czdt.nml (its export: mhd5's CZ and field, settled at the
+! coupled step) with the atmosphere on top, everything free from t = 0, as
+! runs/hd047_cpl.nml (which ran 10000 steps clean) plus the field:
+! - the atmosphere: one profile (init file) pressure-matched per column to the
+!   CZ top below 1.2 Mm (atm_match_base);
 ! - b_smooth_cells = 1: the CZ field smoothed horizontally by one (0.47 deg)
 !   cell, then the DPF potential field seeded above the join (b_seed 'dpf');
 !   at 1.875 deg one cell cut the Yin-Yang corner force ~3x;
-! - B diffusion: b_diff_form 'resistive' with eta = |v| dr/2 (b_eta_dr 1;
-!   1000 steps stable at 1.875 deg, no grid-scale build-up);
-! - heating as hd047_cpl (H_c, no H_B |B| term): the relaxed corona keeps
-!   its heating while the field arrives;
-! - everything else as hd047_cpl (si_radial, wave cap 1, TRAC, global steps).
-! 1152 columns: 576 ranks (6 nodes x 96) give 2 columns each. Expect dt
-! ~0.2-0.5 s with the field. The DPF solve runs once at the start.
+! - B diffusion as step 1: 'resistive' with eta = |v| dr/2; along-field
+!   conduction (cond_dB0_G 10), si_alfven, the dt-based Alfven cap;
+! - heating as hd047_cpl (H_c, no H_B |B| term);
+! - si_radial, wave cap 1, TRAC, global steps (as hd047_cpl).
+! 1152 columns: 576 ranks (6 nodes x 96) give 2 each. The DPF solve runs once
+! at the start (dpf_maxit 5000, as real047_atm).
 ! Watch: log.txt (dt, Mach, max|B|, div B), footpoints.txt, the TR heights,
-! the shell dumps, and the box (on the Yin corner where the corner force sat).
-! A restart every 20 min of model time (MHD + atmosphere: ~7 GB each; delete old ones).
-! Before submitting: set restart_from to hd047_cpl's last restart; check import_dir.
-!   sbatch -N 6 --ntasks-per-node 96 -t 04:00:00 tools/job.stampede3_spr4 runs/mix047.nml
+! the shell dumps, the box (on the Yin corner where the corner force sat).
+! A restart every 20 min of model time (MHD + atmosphere: ~7 GB each).
+!   sbatch -N 6 --ntasks-per-node 96 -t 04:00:00 tools/job.stampede3_spr4 runs/mhd047_cpl.nml
 &cz3d
   grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
   table_file = 'data/eos_table_wind.bin'
-  restart_from = '/scratch/09595/xianyu2023/CZTR_3D_out/hd047_cpl/restart_XXXXXXXX.rst'
-  restart_new_output = .true.
-  import_dir = '/scratch/09595/xianyu2023/CZ_3D/output/export_mhd5', import_cz_on_restart = .true.
-  atm_match_on_restart = .true.
-  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/mix047'
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/mhd047_czdt'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/mhd047_cpl'
   wall_top = 'outflow'
   top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
   use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
@@ -37,7 +30,7 @@
   diff_top_km = 500.0, diff_top_above_km = 50.0
   ds1_random = 0.0
   yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
-  use_atmosphere = .true., freeze_side = 'none'
+  use_atmosphere = .true., freeze_side = 'none', atm_match_base = .true.
   rho_floor = 1.0e-24
   H_ext = 5.0e-7, lambda_ext_rsun = 0.7, H_c = 3.0e-5, lambda_c_km = 4.0e4
   cond_r_rsun = 5.0, alpha_cl = 1.05
