@@ -49,7 +49,7 @@ module cztr3d_atm_mod
   real(dp), allocatable :: rho_A(:,:,:), T_A(:,:,:), cv_A(:,:,:), cs_A(:,:,:), ne_A(:,:,:), p_A(:,:,:)
   real(dp), allocatable :: F1(:,:,:,:), F2(:,:,:,:), F3(:,:,:,:), Dv(:,:,:,:)
 
-  public :: atm_init, atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, atm_switch
+  public :: atm_init, atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, atm_switch, trac_f
 
 contains
 

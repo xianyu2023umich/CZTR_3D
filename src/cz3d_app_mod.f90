@@ -24,7 +24,7 @@ module cz3d_app_mod
   use cz3d_bg_mod, only: k_join, n_r, n_c, bg_view, r_c, r_f, drdxi_c, rho0, s0, p0, lnp0, g_c, z_c, ds0dr, rho1_init, s1_init, &
       v_init, tab, area_f, xi, T0, ddr_c, cs0, vol_c, r_top_cz
   use cz3d_transport_mod, only: transport_column, cool_f, cool_c, grey_i0, tr_view, col_bottom, col_top
-  use cztr3d_atm_mod, only: atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce, atm_switch
+  use cztr3d_atm_mod, only: atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce, atm_switch, trac_f
   use eos_types, only: eos_state
   use eos_thermo, only: eos_get_from_rho_T
   use const_mod, only: Lsun
@@ -4393,7 +4393,8 @@ contains
   ! where log10 T changes by dlogT to a radial neighbour (at most 32), so the
   ! transition region is integrated through. At each sub-point log10 T and
   ! ln(n_e n_H) are trilinear between the cell centres (one ghost layer, the
-  ! state's ghosts filled first), each carries the cell volume / its count.
+  ! state's ghosts filled first), each carries the cell volume / its count;
+  ! with euv_trac the emission times the TR broadening factor f(T) (trac_f).
   ! A sub-point is weighted by its Yin-Yang core cover (1/2 where both
   ! patches' cores hold it) and dropped when the sphere at the join hides it
   ! from the observer; it is deposited as a square of side its horizontal
@@ -4514,6 +4515,7 @@ contains
                   m = min(nT - 1, int(f) + 1)
                   f = f - (m - 1)
                   em = w*exp(lnp)*((1.0_dp - f)*euv_K(m, :) + f*euv_K(m+1, :))*dvs
+                  if (euv_trac) em = em*trac_f(10.0_dp**ltp)        ! (the stretched TR's emission measure)
                   p = rs*q
                   do iv = 1, euv_n_view
                     u = dot_product(p, ex(:, iv));  v = dot_product(p, ey(:, iv))
