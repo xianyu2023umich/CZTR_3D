@@ -743,81 +743,83 @@ contains
   ! siSa_B for v_theta, v_phi); Thomas algorithm (the rows are diagonally
   ! dominant). X2 (optional): a second right-hand side with the same matrix
   ! (v_theta and v_phi), eliminated with the same multipliers.
-  ! All (j, k) columns of a column stack at once, (j, k) the inner index:
-  ! the recursion runs in r, each step a vector operation over the columns
-  ! (the same arithmetic per column); a column whose S is 0 everywhere keeps
-  ! its X (the identity, not solved)
+  ! The columns of a column stack in groups of one row (fixed k, the nb(2)
+  ! columns j), j the inner index: the recursion runs in r, each step a
+  ! vector operation over the row's columns (the same arithmetic per column);
+  ! a row-sized group keeps the work arrays in cache (all nb(2) nb(3) columns
+  ! at once streamed them from memory: CZTR_box, 2026-11-22); a column whose
+  ! S is 0 everywhere keeps its X (the identity, not solved)
   subroutine si_column_solve(X, SS, X2)
     real(dp), intent(inout) :: X(:, :, :, :)
     real(dp), intent(in) :: SS(:, :, :, :)
     real(dp), intent(inout), optional :: X2(:, :, :, :)
-    integer :: c, q, i, j, k, m, nk, n, g, ib, njk, jk
+    integer :: c, q, i, j, k, m, nk, n, g, ib, nj
     real(dp), allocatable :: a(:,:), b(:,:), cc(:,:), d(:,:), d2(:,:), wf(:,:), rp(:,:), sv(:,:), w(:), smax(:)
-    real(dp) :: vol
+    real(dp), allocatable :: vol(:), afq(:), rdc(:)
     logical :: two
     two = present(X2)
     nk = si_kb1 - si_kb0 + 1
     m = nk*nb(1)
-    njk = nb(2)*nb(3)
-    allocate(a(njk, m), b(njk, m), cc(njk, m), d(njk, m), wf(njk, 0:m), rp(njk, m), sv(njk, m), w(njk), smax(njk))
-    if (two) allocate(d2(njk, m))
+    nj = nb(2)
+    allocate(a(nj, m), b(nj, m), cc(nj, m), d(nj, m), wf(nj, 0:m), rp(nj, m), sv(nj, m), w(nj), smax(nj))
+    allocate(vol(m), afq(m), rdc(m))
+    if (two) allocate(d2(nj, m))
     call cz_unbind()                                   ! (the global radial arrays)
+    do n = 1, m
+      g = si_i0 - 1 + n
+      vol(n) = r_c(g)**2*(r_f(g) - r_f(g-1))
+      afq(n) = r_f(g)**2*0.25_dp                       ! (the face area times the means' 1/4, as before)
+      rdc(n) = r_c(g+1) - r_c(g)
+    end do
     do c = 1, si_ncol
-      ! the column stack's values, (j, k) inner
-      do q = 1, nk
-        ib = si_cb(q, c)
-        do k = 1, nb(3)
-          do j = 1, nb(2)
-            jk = j + (k - 1)*nb(2)
-            do i = 1, nb(1)
-              n = (q - 1)*nb(1) + i
-              g = si_i0 - 1 + n
-              rp(jk, n) = rho0(g) + rq(g)*State_GVB(i, j, k, rho1_, ib)
-              sv(jk, n) = SS(i, j, k, ib)
-              d(jk, n) = X(i, j, k, ib)
-              if (two) d2(jk, n) = X2(i, j, k, ib)
+      do k = 1, nb(3)
+        ! the row's values, j inner
+        do q = 1, nk
+          ib = si_cb(q, c)
+          do i = 1, nb(1)
+            n = (q - 1)*nb(1) + i
+            g = si_i0 - 1 + n
+            do j = 1, nj
+              rp(j, n) = rho0(g) + rq(g)*State_GVB(i, j, k, rho1_, ib)
+              sv(j, n) = SS(i, j, k, ib)
+              d(j, n) = X(i, j, k, ib)
             end do
+            if (two) d2(:, n) = X2(i, 1:nj, k, ib)
           end do
         end do
-      end do
-      smax = maxval(sv, dim=2)
-      if (all(smax <= 0.0_dp)) cycle
-      wf(:, 0) = 0.0_dp;  wf(:, m) = 0.0_dp
-      do n = 1, m - 1
-        g = si_i0 - 1 + n
-        wf(:, n) = r_f(g)**2*0.25_dp*(rp(:, n) + rp(:, n+1))*(sv(:, n) + sv(:, n+1))/(r_c(g+1) - r_c(g))
-      end do
-      do n = 1, m
-        g = si_i0 - 1 + n
-        vol = r_c(g)**2*(r_f(g) - r_f(g-1))
-        a(:, n) = -wf(:, n-1)
-        cc(:, n) = -wf(:, n)
-        b(:, n) = vol*rp(:, n) + wf(:, n-1) + wf(:, n)
-        d(:, n) = vol*rp(:, n)*d(:, n)
-        if (two) d2(:, n) = vol*rp(:, n)*d2(:, n)
-      end do
-      do n = 2, m
-        w = a(:, n)/b(:, n-1)
-        b(:, n) = b(:, n) - w*cc(:, n-1)
-        d(:, n) = d(:, n) - w*d(:, n-1)
-        if (two) d2(:, n) = d2(:, n) - w*d2(:, n-1)
-      end do
-      d(:, m) = d(:, m)/b(:, m)
-      if (two) d2(:, m) = d2(:, m)/b(:, m)
-      do n = m - 1, 1, -1
-        d(:, n) = (d(:, n) - cc(:, n)*d(:, n+1))/b(:, n)
-        if (two) d2(:, n) = (d2(:, n) - cc(:, n)*d2(:, n+1))/b(:, n)
-      end do
-      do q = 1, nk
-        ib = si_cb(q, c)
-        do k = 1, nb(3)
-          do j = 1, nb(2)
-            jk = j + (k - 1)*nb(2)
-            if (smax(jk) <= 0.0_dp) cycle              ! (S = 0 in the whole column: X as it was)
-            do i = 1, nb(1)
-              n = (q - 1)*nb(1) + i
-              X(i, j, k, ib) = d(jk, n)
-              if (two) X2(i, j, k, ib) = d2(jk, n)
+        smax = maxval(sv, dim=2)
+        if (all(smax <= 0.0_dp)) cycle
+        wf(:, 0) = 0.0_dp;  wf(:, m) = 0.0_dp
+        do n = 1, m - 1
+          wf(:, n) = afq(n)*(rp(:, n) + rp(:, n+1))*(sv(:, n) + sv(:, n+1))/rdc(n)
+        end do
+        do n = 1, m
+          a(:, n) = -wf(:, n-1)
+          cc(:, n) = -wf(:, n)
+          b(:, n) = vol(n)*rp(:, n) + wf(:, n-1) + wf(:, n)
+          d(:, n) = vol(n)*rp(:, n)*d(:, n)
+          if (two) d2(:, n) = vol(n)*rp(:, n)*d2(:, n)
+        end do
+        do n = 2, m
+          w = a(:, n)/b(:, n-1)
+          b(:, n) = b(:, n) - w*cc(:, n-1)
+          d(:, n) = d(:, n) - w*d(:, n-1)
+          if (two) d2(:, n) = d2(:, n) - w*d2(:, n-1)
+        end do
+        d(:, m) = d(:, m)/b(:, m)
+        if (two) d2(:, m) = d2(:, m)/b(:, m)
+        do n = m - 1, 1, -1
+          d(:, n) = (d(:, n) - cc(:, n)*d(:, n+1))/b(:, n)
+          if (two) d2(:, n) = (d2(:, n) - cc(:, n)*d2(:, n+1))/b(:, n)
+        end do
+        do q = 1, nk
+          ib = si_cb(q, c)
+          do i = 1, nb(1)
+            n = (q - 1)*nb(1) + i
+            do j = 1, nj
+              if (smax(j) <= 0.0_dp) cycle              ! (S = 0 in the whole column: X as it was)
+              X(i, j, k, ib) = d(j, n)
+              if (two) X2(i, j, k, ib) = d2(j, n)
             end do
           end do
         end do
