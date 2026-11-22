@@ -189,6 +189,9 @@ module cz3d_app_mod
   ! per bound block (cz_bind): atm_switch(z) of its radial cells and sin theta
   ! of its theta cells, ghosts included (cell_cap's ingredients, once per bind)
   real(dp), allocatable :: sw_r(:), sn_t(:)
+  ! the radial size in the Alfven cap's dx_min (cz_bind): drdxi_c, or huge
+  ! where va_cap_horizontal leaves it out (the semi-implicit radial range)
+  real(dp), allocatable :: drc_r(:)
   logical :: glm_cfl = .false.                    ! glm_ch == 'cfl' (a flag for the cell loops)
   ! derived's outputs (need: a sum of them) and cell sets
   integer, parameter :: D_P1 = 1, D_CS = 2, D_T = 4
@@ -343,6 +346,7 @@ contains
   ! and its walls. cz_unbind: the whole column (r_off = 0, both walls).
   subroutine cz_bind(ib)
     integer, intent(in) :: ib
+    integer :: i
     lev_view = Key_IB(KL+2, ib)
     call column_views(Key_IB(KI+1, ib)*nb(1), nb(1))
     at_bottom = arbor_physical_side(ib, 1, 1)
@@ -351,7 +355,13 @@ contains
     col_top = at_top
     if (use_atmosphere) col_top = Key_IB(KI+1, ib)*nb(1) + nb(1) == k_join   ! (grey and MLT end at the join)
     in_atm = use_atmosphere .and. Key_IB(KI+1, ib)*nb(1) >= k_join
-    if (.not. allocated(sw_r)) allocate(sw_r(1-ng:nb(1)+ng), sn_t(1-ng:nb(2)+ng))
+    if (.not. allocated(sw_r)) allocate(sw_r(1-ng:nb(1)+ng), sn_t(1-ng:nb(2)+ng), drc_r(1-ng:nb(1)+ng))
+    drc_r = drdxi_c(1-ng:nb(1)+ng)
+    if (va_cap_horizontal .and. si_radial .and. si_i1 > 0) then
+      do i = 1 - ng, nb(1) + ng
+        if (r_off + i >= si_i0 + 2 .and. r_off + i <= si_i1 - 2) drc_r(i) = huge(1.0_dp)
+      end do
+    end if
     sw_r = 0.0_dp
     if (use_atmosphere) sw_r = atm_switch(z_c(1-ng:nb(1)+ng))
     sn_t = sin(Metric_DB(2, ib)%X_I(1-ng:nb(2)+ng))
@@ -655,7 +665,7 @@ contains
 !DIR$ IVDEP
           do i = i0, i1
             cs_G(i, j, k) = cs_G(i, j, k) + va_cap(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rp(i), cs_G(i, j, k), &
-                norm2(State_GVB(i, j, k, vr_:vp_, ib)), min(drdxi_c(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), &
+                norm2(State_GVB(i, j, k, vr_:vp_, ib)), min(drc_r(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), &
                 r_c(i)*sn_t(j)*Metric_DB(3, ib)%Dx_I(k)), sw_r(i))
           end do
         end if
@@ -719,7 +729,7 @@ contains
           ! (cell_cs, cell_cap, va_eff through va_cap: the same arithmetic)
           siSa_B(i, j, k, ib) = max(0.0_dp, (va_cap(State_GVB(i, j, k, br_, ib)**2, rp, &
               sqrt(5.0_dp/3.0_dp*max(p0(i) + p1_G(i, j, k), 1.0e-30_dp)/rp)/xi(i), &
-              norm2(State_GVB(i, j, k, vr_:vp_, ib)), min(drdxi_c(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), &
+              norm2(State_GVB(i, j, k, vr_:vp_, ib)), min(drc_r(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), &
               r_c(i)*sn_t(j)*Metric_DB(3, ib)%Dx_I(k)), sw_r(i))*dt/(si_cfl - cf))**2 - 0.25_dp*dr**2)
         end do
       end do
@@ -1051,7 +1061,7 @@ contains
           cs0v(i) = sqrt(q(i, 2)*e(i)/rp(i))/xi(i)
           csv(i) = cs0v(i)
           if (use_B) then
-            dxm = min(drdxi_c(i), r_c(i)*Metric_DB(2, iBlock)%Dx_I(j), r_c(i)*sn_t(j)*Metric_DB(3, iBlock)%Dx_I(k))
+            dxm = min(drc_r(i), r_c(i)*Metric_DB(2, iBlock)%Dx_I(j), r_c(i)*sn_t(j)*Metric_DB(3, iBlock)%Dx_I(k))
             vm = norm2(State_GVB(i, j, k, vr_:vp_, iBlock))
             csv(i) = cs0v(i) + va_cap(sum(State_GVB(i, j, k, br_:bp_, iBlock)**2), rp(i), cs0v(i), vm, dxm, sw_r(i))
             crb = 0.0_dp
@@ -1783,7 +1793,7 @@ contains
   subroutine rhs_mhd(ib)
     integer, intent(in) :: ib
     integer :: i, j, k
-    real(dp) :: b(3), v(3), jj(3), ch, rho, rp, b2, vm, dxm, csl, cap, f, s_inv
+    real(dp) :: b(3), v(3), jj(3), ch, rho, rp, b2, vm, dxm, dxg, csl, cap, f, s_inv
     logical :: capon, glmc
     integer :: i0, i1
     call tic(T_R_MCURL)
@@ -1848,7 +1858,8 @@ contains
             rp = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
             b2 = sum(b**2)
             vm = norm2(State_GVB(i, j, k, vr_:vp_, ib))
-            dxm = min(drdxi_c(i), r_c(i)*dth(j), r_c(i)*sn_t(j)*dph(k))
+            dxm = min(drc_r(i), r_c(i)*dth(j), r_c(i)*sn_t(j)*dph(k))
+            dxg = min(drdxi_c(i), r_c(i)*dth(j), r_c(i)*sn_t(j)*dph(k))      ! (the GLM speed's cap: the old one)
             ! the force: cap(cell_cs), lorentz_f
             csl = sqrt(5.0_dp/3.0_dp*max(p0(i) + p1_G(i, j, k), 1.0e-30_dp)/rp)/xi(i)
             cap = merge(max(cfl*dxm/va_dt_target - (csl + vm), max(1.0e5_dp, va_floor_cs*csl*sw_r(i))), va_max, capon)
@@ -1858,7 +1869,7 @@ contains
             R_CV(i, j, k, vp_) = R_CV(i, j, k, vp_) + f*(jj(1)*b(2) - jj(2)*b(1))/(four_pi*rho)
             ! ch_cell: c_s0/xi + va_eff(cap(c_s0/xi)), 'cfl' the step's bound
             csl = cs0(i)/xi(i)
-            cap = merge(max(cfl*dxm/va_dt_target - (csl + vm), max(1.0e5_dp, va_floor_cs*csl*sw_r(i))), va_max, capon)
+            cap = merge(max(cfl*dxg/va_dt_target - (csl + vm), max(1.0e5_dp, va_floor_cs*csl*sw_r(i))), va_max, capon)
             f = merge(1.0_dp/sqrt(1.0_dp + (b2/(four_pi*rp*cap**2))**2), 1.0_dp, cap > 0.0_dp)
             ch = csl + sqrt(f*b2/(four_pi*rp))
             s_inv = 1.0_dp/drdxi_c(i) + 1.0_dp/(r_c(i)*dth(j)) + 1.0_dp/(r_c(i)*sn_t(j)*dph(k))
@@ -1981,8 +1992,11 @@ contains
   real(dp) function ch_cell(i, j, k, ib) result(ch)
     integer, intent(in) :: i, j, k, ib
     real(dp) :: s_inv, dti
-    ch = cs0(i)/xi(i) + va_eff(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib), &
-        cell_cap(i, j, k, ib, cs0(i)/xi(i)))
+    ! (the cap with the radial size too, as before va_cap_horizontal: psi
+    ! propagates explicitly in r; va_cap is va_eff(cell_cap(...)) from scalars)
+    ch = cs0(i)/xi(i) + va_cap(sum(State_GVB(i, j, k, br_:bp_, ib)**2), rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib), &
+        cs0(i)/xi(i), norm2(State_GVB(i, j, k, vr_:vp_, ib)), &
+        min(drdxi_c(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), r_c(i)*sn_t(j)*Metric_DB(3, ib)%Dx_I(k)), sw_r(i))
     ! ('cfl': branch-free, so the cell loops calling it vectorize)
     s_inv = 1.0_dp/drdxi_c(i) + 1.0_dp/(r_c(i)*Metric_DB(2, ib)%Dx_I(j)) &
         + 1.0_dp/(r_c(i)*sn_t(j)*Metric_DB(3, ib)%Dx_I(k))
@@ -2032,7 +2046,7 @@ contains
     real(dp) :: dxm, fl
     ! (branch-free, so the cell loops calling it vectorize: sw_r = 0 without
     ! the atmosphere; va_dt_target = 0: va_max. sw_r, sn_t: cz_bind's, of block ib)
-    dxm = min(drdxi_c(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), r_c(i)*sn_t(j)*Metric_DB(3, ib)%Dx_I(k))
+    dxm = min(drc_r(i), r_c(i)*Metric_DB(2, ib)%Dx_I(j), r_c(i)*sn_t(j)*Metric_DB(3, ib)%Dx_I(k))
     fl = max(1.0e5_dp, va_floor_cs*cs*sw_r(i))
     c = merge(max(cfl*dxm/va_dt_target - (cs + norm2(State_GVB(i, j, k, vr_:vp_, ib))), fl), va_max, &
         va_dt_target > 0.0_dp)

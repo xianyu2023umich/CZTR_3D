@@ -134,6 +134,15 @@ module cz3d_params_mod
   ! stages: the interior equation of state; the atmosphere: the losses and
   ! heating), off with multirate; .false.: plain fills (the same results)
   logical :: overlap_fills = .true.
+  ! va_cap_horizontal (with va_dt_target > 0 and si_radial): the Alfven-speed
+  ! cap from the horizontal cell sizes only where the radial waves are
+  ! semi-implicit (the si_radial range less its two end cells; as MAS, whose
+  ! semi-implicit term carries the fast speed): cap = cfl dx_h/va_dt_target -
+  ! (c + |v|), not cfl min(dr, dx_h)/va_dt_target - ... (with the 30-70 km
+  ! radial cells that falls to its floor va_floor_cs c_s everywhere above the
+  ! join). The GLM speed keeps the old cap (psi propagates explicitly, also
+  ! radially). Default .false.: the old cap
+  logical :: va_cap_horizontal = .false.
   ! top energy condition: 'eddington' (radiation escapes through the top
   ! face, CZTR step 1) or 'cooling' (no radiative flux through the top face;
   ! a cooling layer removes L_bottom, its flux F(r) = F_top exp(-(r_top - r)/w)
@@ -638,7 +647,7 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ overlap_fills, grey_atm_blocks, b_eta_radial, phot_band_file, phot_n_lambda, phot_lambda_A, phot_z_km, euv_dt, euv_at_end, euv_trac, euv_n_view, euv_npix, euv_lon_deg, euv_lat_deg, euv_fov_rsun, euv_table, b_smooth_cells, test_freeze_b, b_eta_dr, b_eta_cs, test_b_diff_only, b_diff_form, b_diffusion_h, b_diff_limiter, cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  namelist /cz3d/ va_cap_horizontal, overlap_fills, grey_atm_blocks, b_eta_radial, phot_band_file, phot_n_lambda, phot_lambda_A, phot_z_km, euv_dt, euv_at_end, euv_trac, euv_n_view, euv_npix, euv_lon_deg, euv_lat_deg, euv_fov_rsun, euv_table, b_smooth_cells, test_freeze_b, b_eta_dr, b_eta_cs, test_b_diff_only, b_diff_form, b_diffusion_h, b_diff_limiter, cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &

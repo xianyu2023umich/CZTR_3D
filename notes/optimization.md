@@ -53,5 +53,14 @@ built with `-ffp-contract=off`).
 - Overlap for the diffusion's fill (eta, the v_r copy, the interior EOS):
   only if Stampede3 shows the overlaps pay.
 - The EOS evaluation itself (eos_hhe's table interpolation): later.
-- ARBOR's ghost fill: run_portal fix by the ARBOR session (fill -30%),
-  to be committed and installed there.
+- Alfven cap from the horizontal cells (va_cap_horizontal, 2026-11-22, off):
+  the cap's dx_min includes the 30-70 km radial cells, so it sits at its floor
+  1.5 c_s everywhere above the join (the Lorentz force reduced by
+  (cap/v_A)^2, 1e2-1e4) although the radial waves are semi-implicit (MAS uses
+  no cap). With the horizontal cells only (the GLM speed keeps the old cap),
+  1.875 tests: switching it on in a relaxed state (T2) releases huge forces
+  (Mach 360 in 20 steps); a fresh DPF start also grows strong flows (Mach 52
+  in 40 steps at lat -4.7, lon 40.3, z 1.4 Mm) while the old cap stays calm:
+  the seeded field is far from force balance at the join, which the old cap
+  hides. Needs a relaxed initial field (magnetofriction, or a ramp of the cap)
+  before it can be used.
