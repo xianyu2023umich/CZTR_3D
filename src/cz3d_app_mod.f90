@@ -310,7 +310,8 @@ module cz3d_app_mod
     end subroutine cz_profile
     module subroutine dump_shells_write()
     end subroutine dump_shells_write
-    module integer(i8) function state_checksum() result(c)
+    module function state_checksum() result(c)
+      integer(i8) :: c
     end function state_checksum
     module subroutine max_mach_report(iStep, t)
       integer, intent(in) :: iStep

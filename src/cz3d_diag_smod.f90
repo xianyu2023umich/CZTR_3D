@@ -1156,7 +1156,10 @@ contains
 
   ! Order-independent checksum of the interior state of all blocks, to
   ! compare runs (e.g. continued vs uninterrupted) bitwise
-  module integer(i8) function state_checksum() result(c)
+  ! (the result typed in the body: ifx does not resolve the module's kind i8
+  ! in a submodule function's prefix)
+  module function state_checksum() result(c)
+    integer(i8) :: c
     integer(i8) :: x
     integer :: jb, ib, i, j, k, v
     c = 0
