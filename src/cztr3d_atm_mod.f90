@@ -93,6 +93,12 @@ contains
     allocate(qr_B(0:nb(1), nb(2), nb(3), nBlockMax), qt_B(nb(1), 0:nb(2), nb(3), nBlockMax), &
         qp_B(nb(1), nb(2), 0:nb(3), nBlockMax), Qloss_B(nb(1), nb(2), nb(3), nBlockMax), Qheat_B(nb(1), nb(2), nb(3), nBlockMax))
     qr_B = 0.0_dp;  qt_B = 0.0_dp;  qp_B = 0.0_dp;  Qloss_B = 0.0_dp;  Qheat_B = 0.0_dp
+    ! the ARBOR timers on every rank (arbor_timer_report is collective: a rank
+    ! without atmosphere blocks must hold the same timers)
+    if (tm_st == 0) then
+      tm_st = arbor_timer_id('atm: states');  tm_co = arbor_timer_id('atm: conduction')
+      tm_lo = arbor_timer_id('atm: losses, heating')
+    end if
     if (allocated(rho_A)) return
     allocate(rho_A(0:nb(1)+1, 0:nb(2)+1, 0:nb(3)+1))
     allocate(T_A, cv_A, cs_A, ne_A, p_A, mold=rho_A)
@@ -159,10 +165,6 @@ contains
     integer :: i, j, k, m
     m = nb(1)
     if (maxval(atm_switch(z_c(1:m))) < 1.0e-8_dp .and. atm_switch(r_f(m) - r_top_cz) < 1.0e-8_dp) return  ! (deep CZ block)
-    if (tm_st == 0) then
-      tm_st = arbor_timer_id('atm: states');  tm_co = arbor_timer_id('atm: conduction')
-      tm_lo = arbor_timer_id('atm: losses, heating')
-    end if
     call arbor_timer_start(tm_st)
     ready = .false.
     if (present(losses_ready)) ready = losses_ready

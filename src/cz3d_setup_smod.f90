@@ -1433,11 +1433,13 @@ contains
     integer, allocatable :: cid(:), pos(:), own(:), lev(:), per(:)
     integer :: j, nth_b, nph_b, ncol, n
     character(len=200) :: msg
-    if (any(tree%key(KL+2, :) /= tree%key(KL+2, 1)) .or. any(tree%key(KL+3, :) /= tree%key(KL+2, 1))) &
+    associate (key => tree%key(:, 1:tree%n_leaf))
+    if (any(key(KL+2, :) /= key(KL+2, 1)) .or. any(key(KL+3, :) /= key(KL+2, 1))) &
         call arbor_abort('cz3d: si_radial needs every block at one horizontal level')
-    nth_b = maxval(tree%key(KI+2, :)) + 1
-    nph_b = maxval(tree%key(KI+3, :)) + 1
-    ncol = maxval(tree%key(KP, :))*nth_b*nph_b
+    nth_b = maxval(key(KI+2, :)) + 1
+    nph_b = maxval(key(KI+3, :)) + 1
+    ncol = maxval(key(KP, :))*nth_b*nph_b
+    end associate
     allocate(cid(tree%n_leaf), pos(0:ncol-1), own(tree%n_leaf), lev(tree%n_leaf), per(0:n_ranks-1))
     pos = -1
     n = 0
