@@ -25,6 +25,15 @@ temperature: compare versions back to back, or against an untouched stage.
   neutral-H term and its tanh skipped where its weight is exactly 0,
   exp(-0.25) at tau's floor; floors once per step with the column EOS.
 
+- stable_dt -30%: the speeds in a vectorized pass (va_cap), atm_dt with the
+  column EOS.
+- Radial implicit solves: all (j, k) columns of a stack at once (the Thomas
+  recursion vectorized across columns), one elimination for v_theta and
+  v_phi (the same matrix); in the implicit blocks s1, B, psi updated right
+  after the RHS (rho1 and the solved velocities after the solves: the
+  operator uses the stage's starting density). ~-27%.
+- ARBOR b71f61b installed (Yin-Yang stencils per radial column): ghost fill -38%.
+
 Bit-identity: checked with the smoke test and T2 checksums at every step.
 Loops that newly vectorize differ only by FMA contraction (identical when
 built with `-ffp-contract=off`).
@@ -36,6 +45,9 @@ built with `-ffp-contract=off`).
   its floor). Vectorizing them as the Lorentz loop (the arithmetic written
   out in the loop, branch-free, ivdep) might save 30-40% of the ~1.0 s per
   20 steps (~2% of a step).
+- Column solves: the remaining ~1 s per 20 steps is mostly the transposition
+  (gathering columns from (i, j, k) into (jk, n) and back, strided); storing
+  the implicit tendencies column-major from the start would avoid it.
 - RHS leftovers: the p1 shell and the curls' scaled copies cover edges and
   corners (-5% of cells at 0.47 deg); fuse the advection's update passes.
 - Overlap for the diffusion's fill (eta, the v_r copy, the interior EOS):

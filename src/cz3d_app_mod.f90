@@ -140,7 +140,7 @@ module cz3d_app_mod
       T_AFTER = 9, T_D_ETA = 10, T_D_EOS = 11, T_D_FA = 12, T_D_FB = 13, T_D_FR = 14, T_D_FE = 15, T_D_DIV = 16, &
       T_D_UPD = 17, T_D_IMP = 18, T_D_PRE = 19, T_D_SIP = 20, T_R_EOS = 21, T_R_MASS = 22, T_R_ADV = 23, &
       T_R_PRS = 24, T_R_MCURL = 25, T_R_MLOOP = 26, T_R_UPD = 27, T_R_SIC = 28, T_G_RK = 29, T_G_ATM = 30, &
-      T_G_DIF = 31, T_G_JOIN = 32, T_G_TR = 33, T_G_ETA = 34, T_R_OVL = 35, T_A_OVL = 36, n_tim = 36
+      T_G_DIF = 31, T_G_JOIN = 32, T_G_TR = 33, T_G_ETA = 34, T_R_OVL = 35, T_A_OVL = 36, T_S_SOL = 37, n_tim = 37
   character(len=24), parameter :: tim_name(n_tim) = [character(len=24) :: 'advance (total)', &
       '  ghost fill + join', '  rhs + RK update', '  radial implicit solves', '  energy transport', &
       '  atmosphere', '  diffusion', 'stable_dt (local)', 'after_step (outputs)', &
@@ -150,7 +150,7 @@ module cz3d_app_mod
       '    EOS (derived, p1)', '    mass flux div', '    advection (4 vars)', '    pressure, curvature', &
       '    MHD: curls, div B', '    MHD: Lorentz, psi', '    RK update', '    si_coeff', &
       '    fill: 4 RK stages', '    fill: atmosphere', '    fill: diffusion', '    join_bc (all)', &
-      '    fill: transport', '    fill: eta', '    during the fill: EOS', '    during the fill: losses']
+      '    fill: transport', '    fill: eta', '    during the fill: EOS', '    during the fill: losses', '    the column solves']
   real(dp) :: tim_acc(n_tim) = 0.0_dp, tim_t0(n_tim) = 0.0_dp
   ! the dt report (cz_log): per constraint (1 CFL sum, 2 wave cap, 3 losses)
   ! this step's smallest dt on this rank and its cell: (c, 1) dt, 2 global
@@ -668,6 +668,12 @@ contains
 
   ! ================================================================ radial semi-implicit
 
+  ! the variables the column solves act on: v_r, and v_theta, v_phi with si_alfven
+  pure logical function si_var(v)
+    integer, intent(in) :: v
+    si_var = v == vr_ .or. (si_alfven .and. (v == vt_ .or. v == vp_))
+  end function si_var
+
   logical function si_in(ib)
     integer, intent(in) :: ib
     si_in = si_radial .and. Key_IB(KI+1, ib) >= si_kb0 .and. Key_IB(KI+1, ib) <= si_kb1
@@ -723,57 +729,84 @@ contains
   ! local column's range (conservative 3-point form on the cell widths; face
   ! S and rho the means of the two cells; no flux through the range's end
   ! faces). X(i, j, k, ib) on the blocks of the range, S = SS (siS_B, or
-  ! siSa_B for v_theta, v_phi); Thomas algorithm (the rows are diagonally dominant)
-  subroutine si_column_solve(X, SS)
+  ! siSa_B for v_theta, v_phi); Thomas algorithm (the rows are diagonally
+  ! dominant). X2 (optional): a second right-hand side with the same matrix
+  ! (v_theta and v_phi), eliminated with the same multipliers.
+  ! All (j, k) columns of a column stack at once, (j, k) the inner index:
+  ! the recursion runs in r, each step a vector operation over the columns
+  ! (the same arithmetic per column); a column whose S is 0 everywhere keeps
+  ! its X (the identity, not solved)
+  subroutine si_column_solve(X, SS, X2)
     real(dp), intent(inout) :: X(:, :, :, :)
     real(dp), intent(in) :: SS(:, :, :, :)
-    integer :: c, q, i, j, k, m, nk, n, g, ib
-    real(dp), allocatable :: a(:), b(:), cc(:), d(:), wf(:), rp(:), sv(:)
-    real(dp) :: vol, w
+    real(dp), intent(inout), optional :: X2(:, :, :, :)
+    integer :: c, q, i, j, k, m, nk, n, g, ib, njk, jk
+    real(dp), allocatable :: a(:,:), b(:,:), cc(:,:), d(:,:), d2(:,:), wf(:,:), rp(:,:), sv(:,:), w(:), smax(:)
+    real(dp) :: vol
+    logical :: two
+    two = present(X2)
     nk = si_kb1 - si_kb0 + 1
     m = nk*nb(1)
-    allocate(a(m), b(m), cc(m), d(m), wf(0:m), rp(m), sv(m))
+    njk = nb(2)*nb(3)
+    allocate(a(njk, m), b(njk, m), cc(njk, m), d(njk, m), wf(njk, 0:m), rp(njk, m), sv(njk, m), w(njk), smax(njk))
+    if (two) allocate(d2(njk, m))
     call cz_unbind()                                   ! (the global radial arrays)
     do c = 1, si_ncol
-      do k = 1, nb(3)
-        do j = 1, nb(2)
-          do q = 1, nk
-            ib = si_cb(q, c)
+      ! the column stack's values, (j, k) inner
+      do q = 1, nk
+        ib = si_cb(q, c)
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            jk = j + (k - 1)*nb(2)
             do i = 1, nb(1)
               n = (q - 1)*nb(1) + i
               g = si_i0 - 1 + n
-              rp(n) = rho0(g) + rq(g)*State_GVB(i, j, k, rho1_, ib)
-              sv(n) = SS(i, j, k, ib)
-              d(n) = X(i, j, k, ib)
+              rp(jk, n) = rho0(g) + rq(g)*State_GVB(i, j, k, rho1_, ib)
+              sv(jk, n) = SS(i, j, k, ib)
+              d(jk, n) = X(i, j, k, ib)
+              if (two) d2(jk, n) = X2(i, j, k, ib)
             end do
           end do
-          if (maxval(sv) <= 0.0_dp) cycle
-          wf(0) = 0.0_dp;  wf(m) = 0.0_dp
-          do n = 1, m - 1
-            g = si_i0 - 1 + n
-            wf(n) = r_f(g)**2*0.25_dp*(rp(n) + rp(n+1))*(sv(n) + sv(n+1))/(r_c(g+1) - r_c(g))
-          end do
-          do n = 1, m
-            g = si_i0 - 1 + n
-            vol = r_c(g)**2*(r_f(g) - r_f(g-1))
-            a(n) = -wf(n-1)
-            cc(n) = -wf(n)
-            b(n) = vol*rp(n) + wf(n-1) + wf(n)
-            d(n) = vol*rp(n)*d(n)
-          end do
-          do n = 2, m
-            w = a(n)/b(n-1)
-            b(n) = b(n) - w*cc(n-1)
-            d(n) = d(n) - w*d(n-1)
-          end do
-          d(m) = d(m)/b(m)
-          do n = m - 1, 1, -1
-            d(n) = (d(n) - cc(n)*d(n+1))/b(n)
-          end do
-          do q = 1, nk
-            ib = si_cb(q, c)
+        end do
+      end do
+      smax = maxval(sv, dim=2)
+      if (all(smax <= 0.0_dp)) cycle
+      wf(:, 0) = 0.0_dp;  wf(:, m) = 0.0_dp
+      do n = 1, m - 1
+        g = si_i0 - 1 + n
+        wf(:, n) = r_f(g)**2*0.25_dp*(rp(:, n) + rp(:, n+1))*(sv(:, n) + sv(:, n+1))/(r_c(g+1) - r_c(g))
+      end do
+      do n = 1, m
+        g = si_i0 - 1 + n
+        vol = r_c(g)**2*(r_f(g) - r_f(g-1))
+        a(:, n) = -wf(:, n-1)
+        cc(:, n) = -wf(:, n)
+        b(:, n) = vol*rp(:, n) + wf(:, n-1) + wf(:, n)
+        d(:, n) = vol*rp(:, n)*d(:, n)
+        if (two) d2(:, n) = vol*rp(:, n)*d2(:, n)
+      end do
+      do n = 2, m
+        w = a(:, n)/b(:, n-1)
+        b(:, n) = b(:, n) - w*cc(:, n-1)
+        d(:, n) = d(:, n) - w*d(:, n-1)
+        if (two) d2(:, n) = d2(:, n) - w*d2(:, n-1)
+      end do
+      d(:, m) = d(:, m)/b(:, m)
+      if (two) d2(:, m) = d2(:, m)/b(:, m)
+      do n = m - 1, 1, -1
+        d(:, n) = (d(:, n) - cc(:, n)*d(:, n+1))/b(:, n)
+        if (two) d2(:, n) = (d2(:, n) - cc(:, n)*d2(:, n+1))/b(:, n)
+      end do
+      do q = 1, nk
+        ib = si_cb(q, c)
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            jk = j + (k - 1)*nb(2)
+            if (smax(jk) <= 0.0_dp) cycle              ! (S = 0 in the whole column: X as it was)
             do i = 1, nb(1)
-              X(i, j, k, ib) = d((q - 1)*nb(1) + i)
+              n = (q - 1)*nb(1) + i
+              X(i, j, k, ib) = d(jk, n)
+              if (two) X2(i, j, k, ib) = d2(jk, n)
             end do
           end do
         end do
@@ -986,41 +1019,55 @@ contains
     class(cz3d_app_t), intent(inout) :: self
     integer, intent(in) :: iBlock
     real(dp) :: cs, cs0, crad, ratew, rate, rr, sth, rc, rp(nb(1)), s(nb(1)), q(nb(1), 2), e(nb(1))
+    real(dp) :: cs0v(nb(1)), csv(nb(1)), cradv(nb(1)), rcv(nb(1)), insi(nb(1)), dxm, vm, crb
     integer :: i, j, k
     call tic(T_DT)
     call cz_bind(iBlock)
     rate = 0.0_dp
     ratew = 0.0_dp
+    insi = 0.0_dp
+    do i = 1, nb(1)
+      if (si_radial .and. r_off + i >= si_i0 + 2 .and. r_off + i <= si_i1 - 2) insi(i) = 1.0_dp
+    end do
     do k = 1, nb(3)
       do j = 1, nb(2)
-        sth = sin(Metric_DB(2, iBlock)%X_I(j))
+        sth = sn_t(j)
         do i = 1, nb(1)
           rp(i) = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, iBlock)
           s(i) = s0(i) + State_GVB(i, j, k, s1_, iBlock)
         end do
         call eos_fields_n(tab, [F_LNP, F_GAMMA1], nb(1), rp, s, q)
         call vexp(nb(1), q(:, 1), e)
+        ! the speeds and the rate of each cell (a loop that vectorizes: va_cap
+        ! is va_eff(cell_cap(...)) from scalars)
+        ! si_radial: in the implicit range (not its two end cells) the radial
+        ! wave speed leaves the CFL (with a field the radial Alfven speed stays,
+        ! unless si_alfven); wave_cfl_max: a looser radial wave CFL there
+        ! (wave_cfl_cs_only: with c_s alone)
+!GCC$ ivdep
+!DIR$ IVDEP
         do i = 1, nb(1)
-          cs = sqrt(q(i, 2)*e(i)/rp(i))/xi(i)
-          cs0 = cs
-          if (use_B) cs = cs + va_eff(sum(State_GVB(i, j, k, br_:bp_, iBlock)**2), rp(i), cell_cap(i, j, k, iBlock, cs))
-          rr = r_c(i)
-          ! si_radial: in the implicit range (not its two end cells) the radial
-          ! wave speed leaves the CFL (with a field the radial Alfven speed stays,
-          ! unless si_alfven); wave_cfl_max: a looser radial wave CFL there
-          ! (wave_cfl_cs_only: with c_s alone)
-          crad = cs
-          if (si_radial) then
-            if (r_off + i >= si_i0 + 2 .and. r_off + i <= si_i1 - 2) then
-              if (wave_cfl_max > 0.0_dp) ratew = max(ratew, merge(cs0, cs, wave_cfl_cs_only)/drdxi_c(i))
-              crad = 0.0_dp
-              if (use_B .and. .not. si_alfven) &
-                  crad = va_eff(State_GVB(i, j, k, br_, iBlock)**2, rp(i), cell_cap(i, j, k, iBlock, cs0))
-            end if
+          cs0v(i) = sqrt(q(i, 2)*e(i)/rp(i))/xi(i)
+          csv(i) = cs0v(i)
+          if (use_B) then
+            dxm = min(drdxi_c(i), r_c(i)*Metric_DB(2, iBlock)%Dx_I(j), r_c(i)*sn_t(j)*Metric_DB(3, iBlock)%Dx_I(k))
+            vm = norm2(State_GVB(i, j, k, vr_:vp_, iBlock))
+            csv(i) = cs0v(i) + va_cap(sum(State_GVB(i, j, k, br_:bp_, iBlock)**2), rp(i), cs0v(i), vm, dxm, sw_r(i))
+            crb = 0.0_dp
+            if (.not. si_alfven) crb = va_cap(State_GVB(i, j, k, br_, iBlock)**2, rp(i), cs0v(i), vm, dxm, sw_r(i))
+            cradv(i) = merge(crb, csv(i), insi(i) > 0.0_dp)
+          else
+            cradv(i) = merge(0.0_dp, csv(i), insi(i) > 0.0_dp)
           end if
-          rc = (abs(State_GVB(i, j, k, vr_, iBlock)) + crad)/drdxi_c(i) &
-              + (abs(State_GVB(i, j, k, vt_, iBlock)) + cs)/(rr*Metric_DB(2, iBlock)%Dx_I(j)) &
-              + (abs(State_GVB(i, j, k, vp_, iBlock)) + cs)/(rr*sth*Metric_DB(3, iBlock)%Dx_I(k))
+          rr = r_c(i)
+          rcv(i) = (abs(State_GVB(i, j, k, vr_, iBlock)) + cradv(i))/drdxi_c(i) &
+              + (abs(State_GVB(i, j, k, vt_, iBlock)) + csv(i))/(rr*Metric_DB(2, iBlock)%Dx_I(j)) &
+              + (abs(State_GVB(i, j, k, vp_, iBlock)) + csv(i))/(rr*sth*Metric_DB(3, iBlock)%Dx_I(k))
+        end do
+        ! the maxima and the dt report's minima
+        do i = 1, nb(1)
+          cs = csv(i);  cs0 = cs0v(i);  crad = cradv(i);  rc = rcv(i);  rr = r_c(i)
+          if (insi(i) > 0.0_dp .and. wave_cfl_max > 0.0_dp) ratew = max(ratew, merge(cs0, cs, wave_cfl_cs_only)/drdxi_c(i))
           if (cfl/rc < dtl(1, 1)) then
             block
               real(dp) :: t3(3)
@@ -1031,13 +1078,11 @@ contains
                   real(maxloc(t3, 1), dp), drdxi_c(i)/1.0e5_dp]
             end block
           end if
-          if (si_radial .and. wave_cfl_max > 0.0_dp) then
-            if (r_off + i >= si_i0 + 2 .and. r_off + i <= si_i1 - 2) then
-              if (wave_cfl_max*drdxi_c(i)/merge(cs0, cs, wave_cfl_cs_only) < dtl(2, 1)) &
-                  dtl(2, :) = [wave_cfl_max*drdxi_c(i)/merge(cs0, cs, wave_cfl_cs_only), real(r_off + i, dp), &
-                  z_c(i)/1.0e5_dp, abs(State_GVB(i, j, k, vr_, iBlock)), merge(cs0, cs, wave_cfl_cs_only), cs, 2.0_dp, &
-                  drdxi_c(i)/1.0e5_dp]
-            end if
+          if (insi(i) > 0.0_dp .and. wave_cfl_max > 0.0_dp) then
+            if (wave_cfl_max*drdxi_c(i)/merge(cs0, cs, wave_cfl_cs_only) < dtl(2, 1)) &
+                dtl(2, :) = [wave_cfl_max*drdxi_c(i)/merge(cs0, cs, wave_cfl_cs_only), real(r_off + i, dp), &
+                z_c(i)/1.0e5_dp, abs(State_GVB(i, j, k, vr_, iBlock)), merge(cs0, cs, wave_cfl_cs_only), cs, 2.0_dp, &
+                drdxi_c(i)/1.0e5_dp]
           end if
           rate = max(rate, rc)
           rate_r(i) = max(rate_r(i), rc)
@@ -1189,7 +1234,22 @@ contains
         ! one pass in memory order (the same arithmetic as scaling R_CV first)
         cdt = dt/real(5 - stage, dp)
         if (si_in(ib)) then
-          siR_B(:, :, :, 1:nv, ib) = R_CV          ! (updated after the column solves below)
+          ! the solved velocities (v_r; with si_alfven v_theta, v_phi) and rho1
+          ! (the solves' operator uses the stage's starting density) after the
+          ! column solves below, the other variables now (as outside the range)
+          do v = 1, nv
+            if (si_var(v) .or. v == rho1_) then
+              siR_B(:, :, :, v, ib) = R_CV(:, :, :, v)
+            else
+              do k = 1, nb(3)
+                do j = 1, nb(2)
+                  do i = 1, nb(1)
+                    State_GVB(i, j, k, v, ib) = StateOld_GVB(i, j, k, v, ib) + cdt*R_CV(i, j, k, v)
+                  end do
+                end do
+              end do
+            end if
+          end do
         else if (dt1_now > 0.0_dp) then
           do v = 1, nv
             do k = 1, nb(3)
@@ -1219,16 +1279,18 @@ contains
       ! operator (si_alfven: v_theta, v_phi through theirs), then those blocks' RK update
       call tic(T_SI)
       if (si_radial) then
+        call tic(T_S_SOL)
         call si_column_solve(siR_B(:, :, :, vr_, :), siS_B)
         if (si_alfven) then
-          call si_column_solve(siR_B(:, :, :, vt_, :), siSa_B)
-          call si_column_solve(siR_B(:, :, :, vp_, :), siSa_B)
+          call si_column_solve(siR_B(:, :, :, vt_, :), siSa_B, siR_B(:, :, :, vp_, :))   ! (the same matrix)
         end if
+        call toc(T_S_SOL)
         cdt = dt/real(5 - stage, dp)
         do jb = 1, size(iBlocks)
           ib = iBlocks(jb)
           if (.not. si_in(ib)) cycle
           do v = 1, nv
+            if (.not. (si_var(v) .or. v == rho1_)) cycle
             do k = 1, nb(3)
               do j = 1, nb(2)
                 do i = 1, nb(1)

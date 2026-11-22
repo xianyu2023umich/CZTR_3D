@@ -610,24 +610,39 @@ contains
     integer, intent(in) :: ib
     real(dp), intent(inout), optional :: rate_r(:)
     integer, intent(out), optional :: i_min        ! the block's cell (radial index) of the limit
-    real(dp) :: out(n_field), rh, d
-    integer :: i, j, k
+    real(dp) :: rh, d, rpw(nb(1)), sw(nb(1)), q2(nb(1), 2)
+    integer :: i, j, k, n, l, idx(nb(1))
+    logical :: on(nb(1))
     if (present(i_min)) i_min = 0
     dt = huge(1.0_dp)
     if (.not. (use_losses .and. allocated(Qloss_B))) return
+    ! ln cv, ln T by the column evaluator over each row's cells with S > 0.5
+    ! and a loss (the same values as eos_eval), the height switch per index
+    do i = 1, nb(1)
+      on(i) = atm_switch(z_c(i)) > 0.5_dp
+    end do
     do k = 1, nb(3)
       do j = 1, nb(2)
+        n = 0
         do i = 1, nb(1)
-          if (atm_switch(z_c(i)) <= 0.5_dp .or. Qloss_B(i, j, k, ib) <= 0.0_dp) cycle
-          rh = rho0(i) + State_GVB(i, j, k, RHO1, ib)
-          call eos_eval(tab, rh, s0(i) + State_GVB(i, j, k, S1, ib), out)
-          d = rh*exp(out(F_LNCV))*exp(out(F_LNT))/Qloss_B(i, j, k, ib)
+          if (.not. on(i) .or. Qloss_B(i, j, k, ib) <= 0.0_dp) cycle
+          n = n + 1
+          idx(n) = i
+          rpw(n) = rho0(i) + State_GVB(i, j, k, RHO1, ib)
+          sw(n) = s0(i) + State_GVB(i, j, k, S1, ib)
+        end do
+        if (n == 0) cycle
+        call eos_fields_n(tab, [F_LNCV, F_LNT], n, rpw(1:n), sw(1:n), q2(1:n, :))
+        do l = 1, n
+          i = idx(l)
+          rh = rpw(l)
+          d = rh*exp(q2(l, 1))*exp(q2(l, 2))/Qloss_B(i, j, k, ib)
           if (d < dt) then
             dt = d
             if (present(i_min)) i_min = i
           end if
           if (present(rate_r)) rate_r(i) = max(rate_r(i), cfl*Qloss_B(i, j, k, ib) &
-              /(dt_rad_factor*rh*exp(out(F_LNCV))*exp(out(F_LNT))))
+              /(dt_rad_factor*rh*exp(q2(l, 1))*exp(q2(l, 2))))
         end do
       end do
     end do
