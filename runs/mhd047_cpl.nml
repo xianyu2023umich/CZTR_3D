@@ -15,6 +15,13 @@
 ! at the start (dpf_maxit 5000, as real047_atm).
 ! Watch: log.txt (dt, Mach, max|B|, div B), footpoints.txt, the TR heights,
 ! the shell dumps, the box (on the Yin corner where the corner force sat).
+! grey_atm_blocks = 1 (2026-11-21): the grey radiation also in the first
+! radial block above the join (to ~870 km), heating the low chromosphere: the
+! T floor (4400 K) is then a safety net, no longer its heat source (1.4e6
+! erg/cm2/s without it in the 1.875 test). Watch the floors report at the run's
+! end and the low chromosphere's T in the profiles.
+! The code of 2026-11-21 (6294f33, ARBOR b71f61b): timers, dt report, floors
+! report at the end of the run / every log line; overlap_fills default on.
 ! A restart every 20 min of model time (MHD + atmosphere: ~7 GB each).
 ! Synthetic AIA images every 10 min of model time from 4 sides (lon 0, 90,
 ! 180, 270 at the equator; 512^2, +-1.3 R_sun; data/aia_response.dat):
@@ -29,7 +36,7 @@
   import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/mhd047_czdt'
   out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/mhd047_cpl'
   wall_top = 'outflow'
-  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0, grey_atm_blocks = 1
   use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
   rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
   diffusion_heating = .true.
