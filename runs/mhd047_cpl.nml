@@ -9,7 +9,10 @@
 !   at 1.875 deg one cell cut the Yin-Yang corner force ~3x;
 ! - B diffusion as step 1: 'resistive' with eta = |v| dr/2; along-field
 !   conduction (cond_dB0_G 10), si_alfven, the dt-based Alfven cap;
-! - heating as hd047_cpl (H_c, no H_B |B| term);
+! - heating: hd047_cpl's height terms (H_c, H_ext) plus the field term
+!   H_B |B|_sat exp(-z/lambda_B) gated by n_e (H_B 4e-5, 40 Mm, n_gate 2e11,
+!   |B| saturated at 50 G: the settings of the earlier real-field runs;
+!   2026-11-22, the user: the 0.47 crashes were not caused by the heating);
 ! - si_radial, wave cap 1, TRAC, global steps (as hd047_cpl).
 ! 1152 columns: 576 ranks (6 nodes x 96) give 2 each. The DPF solve runs once
 ! at the start (dpf_maxit 5000, as real047_atm).
@@ -46,6 +49,7 @@
   use_atmosphere = .true., freeze_side = 'none', atm_match_base = .true.
   rho_floor = 1.0e-24
   H_ext = 5.0e-7, lambda_ext_rsun = 0.7, H_c = 3.0e-5, lambda_c_km = 4.0e4
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11, H_B_sat_G = 50.0
   cond_r_rsun = 5.0, alpha_cl = 1.05
   use_B = .true., b_seed = 'dpf', dpf_maxit = 5000, b_seed_rss_rsun = 2.5, b_bc_bottom = 'conductor', b_bc_top = 'radial'
   b_smooth_cells = 1.0
