@@ -105,7 +105,7 @@ contains
   ! lnrho, lnT, lnP, lncp: the logarithms of rho, T, P, cp (from the equation
   ! of state; the face values are interpolated in them)
   subroutine transport_column(dt, rho, T, P, cp, cv, Q, lnrho, lnT, lnP, lncp, v, s1, q_conv, f_mlt, alpha, cfl, &
-      L_bottom, tau_above, use_rad, use_conv, use_hyp, first, q_rad, Qrad, top_wall_face, tsc)
+      L_bottom, tau_above, use_rad, use_conv, use_hyp, first, q_rad, Qrad, top_wall_face, tsc, gt_delta)
     real(dp), intent(in) :: dt, alpha, cfl, L_bottom, tau_above
     real(dp), intent(in) :: rho(-1:), T(-1:), P(-1:), cp(-1:), cv(-1:), Q(-1:), v(-1:), f_mlt(0:)
     real(dp), intent(in) :: lnrho(-1:), lnT(-1:), lnP(-1:), lncp(-1:)
@@ -113,6 +113,9 @@ contains
     logical, intent(in) :: use_rad, use_conv, use_hyp, first, top_wall_face
     real(dp), intent(out) :: q_rad(0:), Qrad(1:)
     real(dp), intent(in), optional :: tsc(0:)
+    ! gt_delta (optional): Gough & Tayler's magnetic stabilisation at the faces,
+    ! delta = B_r^2/(B_r^2 + 4 pi Gamma_1 P); MLT sees grad - grad_ad - delta
+    real(dp), intent(in), optional :: gt_delta(0:)
     real(dp) :: sc(1:n_c), dtc(1:n_c), dtf(0:n_c), rho_f(0:n_c), T_f(0:n_c), P_f(0:n_c), cp_f(0:n_c), Q_f(0:n_c), dTdr(0:n_c), dsdr(0:n_c)
     real(dp) :: stot(-1:n_c+2), Fc_t(0:n_c), K_s(0:n_c), Fr_t0, kap, y, Hp, budget, one_over_tau, vf, F_bot
     real(dp) :: lnrho_f(0:n_c), lnT_f(0:n_c), lnP_f(0:n_c), lncp_f(0:n_c)
@@ -152,6 +155,7 @@ contains
         if (kap <= 0.0_dp) cycle
         Hp = P_f(i)/(rho_f(i)*g_f(i))
         y = -(Hp/cp_f(i))*dsdr(i)
+        if (present(gt_delta)) y = y - gt_delta(i)
         call mlt_flux(y, rho_f(i), T_f(i), P_f(i), g_f(i), kap, cp_f(i), Q_f(i), alpha, Fc_t(i), K_s(i))
         Fc_t(i) = f_mlt(i)*Fc_t(i)
         K_s(i) = f_mlt(i)*K_s(i)

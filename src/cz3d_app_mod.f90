@@ -100,6 +100,18 @@ module cz3d_app_mod
   real(dp), allocatable :: siS_B(:,:,:,:), siR_B(:,:,:,:,:), siV_B(:,:,:,:), siX_B(:,:,:,:)
   ! b_diff_form = 'resistive': the cells' eta [cm^2/s] (with one ghost layer)
   real(dp), allocatable :: EtaB_GB(:,:,:,:,:)
+  ! turb_c_* (the turbulent closure, see cz3d_params_mod): the mean profile
+  ! <f_mlt v_MLT> and the coefficients from it by global cell (a diagnostic,
+  ! turb_NNNN.dat; -1:n_r+2), the transport step's sums (cells, 2: the
+  ! weighted <f v> and the weights), the local closure: TurbV_B(cell, 1:2,
+  ! block) = f v_MLT and v_MLT of the full MLT flux (the transport step),
+  ! TurbC_GB(cell with ghosts, 1:3, block) = eta_t, nu_t, gamma_r per cell
+  ! (turb_coeff_fill, ghosts filled), the viscosity's scratch
+  real(dp), allocatable :: turb_v(:), turb_eta(:), turb_nu(:), turb_gam(:), turb_acc(:,:)
+  real(dp), allocatable :: TurbV_B(:,:,:,:,:), TurbC_GB(:,:,:,:,:), TurbT_GB(:,:,:,:,:)
+  real(dp), allocatable :: turbD_B(:,:,:,:,:), turbS_B(:,:,:,:), turbX1_B(:,:,:,:), turbX2_B(:,:,:,:), &
+      turbX3_B(:,:,:,:), turbK_B(:,:,:,:)
+  logical :: turb_on = .false.
   real(dp), allocatable :: siSa_B(:,:,:,:)   ! si_alfven: S of v_theta, v_phi (the radial Alfven speed)
   integer :: si_i0 = 0, si_i1 = 0, si_kb0 = 0, si_kb1 = -1, si_ncol = 0
   logical :: si_cols = .false.                   ! the columns distributed (cz_columns_to_ranks)
@@ -886,6 +898,14 @@ contains
       end do
       end associate
     end do
+    ! turb_c_eta: the cells' turbulent eta_t added (turb_coeff_fill)
+    if (turb_c_eta > 0.0_dp .and. allocated(TurbC_GB)) then
+      do jb = 1, size(iBlocks)
+        ib = iBlocks(jb)
+        EtaB_GB(1:nb(1), 1:nb(2), 1:nb(3), 1, ib) = EtaB_GB(1:nb(1), 1:nb(2), 1:nb(3), 1, ib) &
+            + TurbC_GB(1:nb(1), 1:nb(2), 1:nb(3), 1, ib)
+      end do
+    end if
     ! b_eta_radial = 'explicit': eta capped at the explicit limit (see cz3d_params_mod)
     if (b_eta_explicit) then
       do jb = 1, size(iBlocks)
@@ -1029,6 +1049,135 @@ contains
       call cz_unbind()
     end if
   end subroutine b_radial_implicit
+
+  ! turb_c_nu: the viscosity's scratch arrays for nbk local blocks
+  subroutine turb_alloc(nbk)
+    integer, intent(in) :: nbk
+    if (allocated(turbS_B)) then
+      if (size(turbS_B, 4) == nbk) return
+      deallocate(turbD_B, turbS_B, turbX1_B, turbX2_B, turbX3_B, turbK_B)
+    end if
+    allocate(turbD_B(nb(1), nb(2), nb(3), 3, nbk), turbS_B(nb(1), nb(2), nb(3), nbk), turbX1_B(nb(1), nb(2), nb(3), nbk), &
+        turbX2_B(nb(1), nb(2), nb(3), nbk), turbX3_B(nb(1), nb(2), nb(3), nbk), turbK_B(nb(1), nb(2), nb(3), nbk))
+    turbD_B = 0.0_dp;  turbS_B = 0.0_dp;  turbX1_B = 0.0_dp;  turbX2_B = 0.0_dp;  turbX3_B = 0.0_dp;  turbK_B = 0.0_dp
+  end subroutine turb_alloc
+
+  ! turb_c_nu: the horizontal part of rho d_t v = div(rho nu_t grad v) for
+  ! v_r, v_theta, v_phi, each as a scalar on the shell (finite volume: the
+  ! theta faces' sin(theta) weights, 1/(r^2 sin(theta) dtheta^2) and
+  ! 1/(r^2 sin^2(theta) dphi^2); the faces' rho nu_t the means of the two
+  ! cells'), from the state as the diffusion's ghost fill left it;
+  ! turb_visc_apply adds the increments after the diffusion. Explicit limit
+  ! nu_t dt (2/dx_theta^2 + 2/dx_phi^2) < 1: hours for Mm cells and
+  ! nu_t ~ 1e12-1e13 cm^2/s
+  subroutine turb_visc_h(iBlocks, dt)
+    integer, intent(in) :: iBlocks(:)
+    real(dp), intent(in) :: dt
+    integer :: jb, ib, i, j, k, c
+    real(dp) :: nu, r0, rxm, rxp, rym, ryp, v0, a, dth, dph, sp, sm, ct, cp_
+    real(dp), parameter :: half = 0.5_dp
+    call turb_alloc(size(State_GVB, 5))
+    do jb = 1, size(iBlocks)
+      ib = iBlocks(jb)
+      turbD_B(:, :, :, :, ib) = 0.0_dp
+      call cz_bind(ib)
+      associate (th => Metric_DB(2, ib)%X_I, dthj => Metric_DB(2, ib)%Dx_I, dphk => Metric_DB(3, ib)%Dx_I)
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          dth = dthj(j)
+          dph = dphk(k)
+          sp = sin(th(j) + half*dth)
+          sm = sin(th(j) - half*dth)
+          do i = 1, nb(1)
+            nu = TurbC_GB(i, j, k, 2, ib)
+            if (max(nu, TurbC_GB(i, j-1, k, 2, ib), TurbC_GB(i, j+1, k, 2, ib), TurbC_GB(i, j, k-1, 2, ib), &
+                TurbC_GB(i, j, k+1, 2, ib)) <= 0.0_dp) cycle
+            r0 = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            rxm = half*(r0*nu + (rho0(i) + rq(i)*State_GVB(i, j-1, k, rho1_, ib))*TurbC_GB(i, j-1, k, 2, ib))
+            rxp = half*(r0*nu + (rho0(i) + rq(i)*State_GVB(i, j+1, k, rho1_, ib))*TurbC_GB(i, j+1, k, 2, ib))
+            rym = half*(r0*nu + (rho0(i) + rq(i)*State_GVB(i, j, k-1, rho1_, ib))*TurbC_GB(i, j, k-1, 2, ib))
+            ryp = half*(r0*nu + (rho0(i) + rq(i)*State_GVB(i, j, k+1, rho1_, ib))*TurbC_GB(i, j, k+1, 2, ib))
+            a = tsc(i)*dt/r0
+            ct = 1.0_dp/(r_c(i)**2*sn_t(j)*dth**2)
+            cp_ = 1.0_dp/(r_c(i)*sn_t(j)*dph)**2
+            do c = vr_, vp_
+              v0 = State_GVB(i, j, k, c, ib)
+              turbD_B(i, j, k, c - vr_ + 1, ib) = a*( &
+                  (sp*rxp*(State_GVB(i, j+1, k, c, ib) - v0) - sm*rxm*(v0 - State_GVB(i, j-1, k, c, ib)))*ct &
+                + (ryp*(State_GVB(i, j, k+1, c, ib) - v0) - rym*(v0 - State_GVB(i, j, k-1, c, ib)))*cp_)
+            end do
+          end do
+        end do
+      end do
+      end associate
+    end do
+    call cz_unbind()
+  end subroutine turb_visc_h
+
+  ! turb_c_nu: the horizontal increments (turb_visc_h) added, then the
+  ! radial part implicit along every column with the semi-implicit solver,
+  ! (rho - (1/r^2) d_r r^2 rho S d_r) v = rho v*, S = nu_t tsc dt (no flux
+  ! through the column's end faces: stress free walls). With
+  ! diffusion_heating the kinetic energy removed from a cell goes into its s1
+  subroutine turb_visc_apply(iBlocks, dt)
+    integer, intent(in) :: iBlocks(:)
+    real(dp), intent(in) :: dt
+    integer :: jb, ib, i, j, k, n
+    real(dp) :: r0, rpw(nb(1)), sw(nb(1)), ltw(nb(1)), tw(nb(1))
+    logical :: heat
+    heat = diffusion_heating
+    call turb_alloc(size(State_GVB, 5))
+    do jb = 1, size(iBlocks)
+      ib = iBlocks(jb)
+      call cz_bind(ib)
+      do i = 1, nb(1)
+        turbS_B(i, :, :, ib) = TurbC_GB(i, 1:nb(2), 1:nb(3), 2, ib)*tsc(i)*dt
+        do k = 1, nb(3)
+          do j = 1, nb(2)
+            r0 = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            if (heat) turbK_B(i, j, k, ib) = 0.5_dp*r0*sum(State_GVB(i, j, k, vr_:vp_, ib)**2)
+            State_GVB(i, j, k, vr_:vp_, ib) = State_GVB(i, j, k, vr_:vp_, ib) + turbD_B(i, j, k, 1:3, ib)
+          end do
+        end do
+      end do
+      turbX1_B(:, :, :, ib) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_, ib)
+      turbX2_B(:, :, :, ib) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vt_, ib)
+      turbX3_B(:, :, :, ib) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vp_, ib)
+    end do
+    call cz_unbind()
+    call si_column_solve(turbX1_B, turbS_B)
+    call si_column_solve(turbX2_B, turbS_B, turbX3_B)
+    do jb = 1, size(iBlocks)
+      ib = iBlocks(jb)
+      if (.not. si_in(ib)) cycle
+      State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_, ib) = turbX1_B(:, :, :, ib)
+      State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vt_, ib) = turbX2_B(:, :, :, ib)
+      State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vp_, ib) = turbX3_B(:, :, :, ib)
+    end do
+    if (.not. heat) return
+    ! s1 += -dE_kin/(rho T) where nu_t acts (T from the column EOS, as b_radial_implicit)
+    do jb = 1, size(iBlocks)
+      ib = iBlocks(jb)
+      call cz_bind(ib)
+      if (maxval(TurbC_GB(1:nb(1), 1:nb(2), 1:nb(3), 2, ib)) <= 0.0_dp) cycle
+      n = nb(1)
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          do i = 1, n
+            rpw(i) = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+            sw(i) = s0(i) + State_GVB(i, j, k, s1_, ib)
+          end do
+          call eos_field_n(tab, F_LNT, n, rpw, sw, ltw)
+          call vexp(n, ltw, tw)
+          do i = 1, n
+            State_GVB(i, j, k, s1_, ib) = State_GVB(i, j, k, s1_, ib) &
+                - (0.5_dp*rpw(i)*sum(State_GVB(i, j, k, vr_:vp_, ib)**2) - turbK_B(i, j, k, ib))/(rpw(i)*tw(i))
+          end do
+        end do
+      end do
+    end do
+    call cz_unbind()
+  end subroutine turb_visc_apply
 
   ! ================================================================ time step
 
@@ -1409,6 +1558,7 @@ contains
       call tic(T_D_ETA)
       if (allocated(EtaB_GB)) call b_eta_fill(iBlocks)       ! (b_diff_form = 'resistive')
       call toc(T_D_ETA)
+      if (turb_c_nu > 0.0_dp .and. allocated(TurbC_GB)) call turb_visc_h(iBlocks, dt)   ! (from the filled state)
       do jb = 1, size(iBlocks)
         if (skip_frozen(iBlocks(jb))) cycle
         call cz_bind(iBlocks(jb))
@@ -1432,6 +1582,7 @@ contains
         end do
       end if
       call toc(T_D_SIP)
+      if (turb_c_nu > 0.0_dp .and. allocated(TurbC_GB)) call turb_visc_apply(iBlocks, dt)
       call toc(T_DIFF)
     end if
     if (ops_on) call ops_snap(5, 8)                    ! after the diffusion
@@ -1851,6 +2002,20 @@ contains
         end do
       end do
     end do
+    ! turb_c_gamma: the pumping's E = gamma_r e_r x B, (E_theta, E_phi) += gamma_r (-B_phi, B_theta)
+    if (turb_c_gamma > 0.0_dp .and. allocated(TurbC_GB)) then
+      do k = 1 - ng, nb(3) + ng
+        do j = 1 - ng, nb(2) + ng
+          if ((j < 1 .or. j > nb(2)) .and. (k < 1 .or. k > nb(3))) cycle
+          i0 = merge(1 - ng, 1, j >= 1 .and. j <= nb(2) .and. k >= 1 .and. k <= nb(3))
+          i1 = merge(nb(1) + ng, nb(1), i0 == 1 - ng)
+          do i = i0, i1
+            B_GV(i, j, k, 2) = B_GV(i, j, k, 2) - TurbC_GB(i, j, k, 3, ib)*State_GVB(i, j, k, bp_, ib)
+            B_GV(i, j, k, 3) = B_GV(i, j, k, 3) + TurbC_GB(i, j, k, 3, ib)*State_GVB(i, j, k, bt_, ib)
+          end do
+        end do
+      end do
+    end if
     call curl_block(B_GV, ib, C_CV)
     ! div B and grad psi
     call div_block(State_GVB(:, :, :, br_:bp_, ib), ib, divB_C)
@@ -2222,10 +2387,29 @@ contains
     real(dp), intent(in), optional :: time          ! the blocks' time (multirate: for the ghosts of other levels)
     real(dp) :: rho(-1:nb(1)+2), T(-1:nb(1)+2), P(-1:nb(1)+2), cp(-1:nb(1)+2), cv(-1:nb(1)+2), Q(-1:nb(1)+2)
     real(dp) :: s1(-1:nb(1)+2), ss(-1:nb(1)+2), q6(-1:nb(1)+2, 6), lnrho(-1:nb(1)+2), Qrad(1:nb(1)), w
-    real(dp) :: qc(0:nb(1)), tsx(0:nb(1)+1)
+    real(dp) :: qc(0:nb(1)), tsx(0:nb(1)+1), tf, tq, tv, dgt(0:nb(1)), b2a, b2b, wh
     integer :: jb, ib, i, j, k, m
+    logical :: gt
     if (.not. (use_radiation .or. use_convection)) return
     m = nb(1)
+    gt = mlt_gough_tayler .and. use_B
+    dgt = 0.0_dp
+    turb_on = max(turb_c_eta, turb_c_nu, turb_c_gamma) > 0.0_dp
+    if (turb_on) then
+      if (.not. allocated(turb_acc)) then
+        allocate(turb_acc(1:n_r, 2), turb_v(-1:n_r+2), turb_eta(-1:n_r+2), turb_nu(-1:n_r+2), turb_gam(-1:n_r+2))
+        turb_v = 0.0_dp;  turb_eta = 0.0_dp;  turb_nu = 0.0_dp;  turb_gam = 0.0_dp
+      end if
+      turb_acc = 0.0_dp
+      if (allocated(TurbV_B)) then
+        if (size(TurbV_B, 5) /= size(State_GVB, 5)) deallocate(TurbV_B, TurbC_GB)
+      end if
+      if (.not. allocated(TurbV_B)) then
+        allocate(TurbV_B(nb(1), nb(2), nb(3), 2, size(State_GVB, 5)), &
+            TurbC_GB(1-ng:nb(1)+ng, 1-ng:nb(2)+ng, 1-ng:nb(3)+ng, 3, size(State_GVB, 5)))
+        TurbV_B = 0.0_dp;  TurbC_GB = 0.0_dp
+      end if
+    end if
     ! the columns use the interior cells and the radial ghosts only: with whole
     ! columns per block the wall conditions alone give them (no exchange);
     ! with radial blocks the ghosts between blocks need a fill
@@ -2248,6 +2432,7 @@ contains
       ib = iBlocks(jb)
       if (use_atmosphere .and. Key_IB(KI+1, ib)*nb(1) >= k_join) then
         ! above the join: no grey, no MLT (their fluxes 0, for the profiles)
+        if (turb_on) TurbV_B(:, :, :, :, ib) = 0.0_dp
         if (qconv_face) then
           FaceState_FVDB(:, :, :, 1, 1, ib) = 0.0_dp
         else
@@ -2288,10 +2473,19 @@ contains
           else
             qc = qconv_FB(:, j, k, ib)
           end if
+          if (gt) then
+            ! Gough & Tayler at the faces: delta = <B_r^2>/(<B_r^2> + 4 pi Gamma_1 P),
+            ! the face values the means of the two cells (B_r^2, not B_r: no cancelling)
+            do i = 0, m
+              b2a = State_GVB(i, j, k, br_, ib)**2
+              b2b = State_GVB(i+1, j, k, br_, ib)**2
+              dgt(i) = 0.5_dp*(b2a + b2b)/(0.5_dp*(b2a + b2b) + four_pi*0.25_dp*(q6(i, 3) + q6(i+1, 3))*(P(i) + P(i+1)))
+            end do
+          end if
           call transport_column(dt, rho, T, P, cp, cv, Q, lnrho, q6(:, 2), q6(:, 1), q6(:, 5), State_GVB(:, j, k, vr_, ib), &
               s1, qc, &
               f_mlt, alpha_mlt, cfl, L_bottom_Lsun*Lsun, grey_tau_above, use_radiation, use_convection, &
-              use_hyperbolic, first, qrad_FB(:, j, k, ib), Qrad, wall_top == 'face' .or. use_atmosphere, tsx)
+              use_hyperbolic, first, qrad_FB(:, j, k, ib), Qrad, wall_top == 'face' .or. use_atmosphere, tsx, dgt)
           if (budget_on .and. .not. first) then
             ! radiation (with L_bottom) and the exact cooling of each cell
             w = wyy_B(j, k, ib)
@@ -2302,6 +2496,24 @@ contains
             end do
           end if
           State_GVB(1:m, j, k, s1_, ib) = s1(1:m)
+          if (turb_on) then
+            ! the closure's velocity: f v_MLT of the full MLT flux F/f at the
+            ! cell (mlt_mod: F = 8 rho c_p T v^3/(g Q ell), g ell = alpha P/rho);
+            ! the mean profile weighted by the column's solid angle (as the profiles)
+            wh = Metric_DB(2, ib)%Vol_I(j)*Metric_DB(3, ib)%Vol_I(k)
+            do i = 1, m
+              tf = 0.5_dp*(f_mlt(i-1) + f_mlt(i))
+              tq = 0.5_dp*(qc(i-1) + qc(i))
+              tv = 0.0_dp
+              if (tq > 0.0_dp .and. tf > 1.0e-12_dp) then
+                tv = (tq/tf*Q(i)*alpha_mlt*P(i)/(8.0_dp*rho(i)**2*cp(i)*T(i)))**(1.0_dp/3.0_dp)
+                turb_acc(r_off + i, 1) = turb_acc(r_off + i, 1) + wh*tf*tv
+              end if
+              turb_acc(r_off + i, 2) = turb_acc(r_off + i, 2) + wh
+              TurbV_B(i, j, k, 1, ib) = tf*tv
+              TurbV_B(i, j, k, 2, ib) = tv
+            end do
+          end if
           if (qconv_face) then
             FaceState_FVDB(0:m, j, k, 1, 1, ib) = qc
           else
@@ -2311,8 +2523,95 @@ contains
       end do
     end do
     call cz_unbind()
+    if (turb_on) then
+      call turb_profile()
+      call turb_coeff_fill(iBlocks)
+    end if
     if (grey_atm_blocks > 0 .and. use_radiation) call grey_atm_all(dt)
   end subroutine cz_transport_all
+
+  ! The turbulent closure's coefficients per cell (turb_c_*): with ell =
+  ! alpha_mlt H_p of the background and the cell's f v_MLT,
+  !   eta_t = turb_c_eta f v ell/3 q, nu_t = turb_c_nu f v ell/3 q,
+  !   gamma_r = -turb_c_gamma f v q,
+  ! q = 1/(1 + B_h^2/B_eq^2), B_eq^2 = 4 pi rho v_MLT^2 with turb_quench
+  ! (the horizontal field's quenching; the radial field's effect is Gough &
+  ! Tayler's, mlt_gough_tayler, through v_MLT), else 1. Then the ghosts (two
+  ! layers, faces), at the radial walls eta_t and nu_t of the boundary cell
+  ! and gamma_r = 0
+  subroutine turb_coeff_fill(iBlocks)
+    integer, intent(in) :: iBlocks(:)
+    integer :: jb, ib, i, j, k
+    real(dp) :: ell, fv, q, rp, beq2
+    do jb = 1, size(iBlocks)
+      ib = iBlocks(jb)
+      call cz_bind(ib)
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          do i = 1, nb(1)
+            fv = TurbV_B(i, j, k, 1, ib)
+            if (fv <= 0.0_dp) then
+              TurbC_GB(i, j, k, :, ib) = 0.0_dp
+              cycle
+            end if
+            ell = alpha_mlt*p0(i)/(rho0(i)*g_c(i))
+            q = 1.0_dp
+            if (turb_quench) then
+              rp = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, ib)
+              beq2 = four_pi*rp*TurbV_B(i, j, k, 2, ib)**2
+              q = beq2/(beq2 + State_GVB(i, j, k, bt_, ib)**2 + State_GVB(i, j, k, bp_, ib)**2)
+            end if
+            TurbC_GB(i, j, k, 1, ib) = turb_c_eta*fv*ell/3.0_dp*q
+            TurbC_GB(i, j, k, 2, ib) = turb_c_nu*fv*ell/3.0_dp*q
+            TurbC_GB(i, j, k, 3, ib) = -turb_c_gamma*fv*q
+          end do
+        end do
+      end do
+    end do
+    call cz_unbind()
+    ! (one coefficient per fill: a multi-variable array's slots 2-3 would be
+    ! taken for a vector's (theta, phi) pair at the Yin-Yang boundaries)
+    if (allocated(TurbT_GB)) then
+      if (size(TurbT_GB, 5) /= size(TurbC_GB, 5)) deallocate(TurbT_GB)
+    end if
+    if (.not. allocated(TurbT_GB)) allocate(TurbT_GB(1-ng:nb(1)+ng, 1-ng:nb(2)+ng, 1-ng:nb(3)+ng, 1, size(TurbC_GB, 5)))
+    do i = 1, 3
+      TurbT_GB(:, :, :, 1, :) = TurbC_GB(:, :, :, i, :)
+      call arbor_fill_ghosts(TurbT_GB, n_ghost=2, faces_only=.true.)
+      TurbC_GB(:, :, :, i, :) = TurbT_GB(:, :, :, 1, :)
+    end do
+    do jb = 1, size(iBlocks)
+      ib = iBlocks(jb)
+      if (Key_IB(KI+1, ib) == 0) then
+        do i = 1 - ng, 0
+          TurbC_GB(i, :, :, 1:2, ib) = TurbC_GB(1, :, :, 1:2, ib)
+          TurbC_GB(i, :, :, 3, ib) = 0.0_dp
+        end do
+      end if
+      if ((Key_IB(KI+1, ib) + 1)*nb(1) == n_r) then
+        do i = nb(1) + 1, nb(1) + ng
+          TurbC_GB(i, :, :, 1:2, ib) = TurbC_GB(nb(1), :, :, 1:2, ib)
+          TurbC_GB(i, :, :, 3, ib) = 0.0_dp
+        end do
+      end if
+    end do
+  end subroutine turb_coeff_fill
+
+  ! The turbulent closure's mean profile (a diagnostic, turb_NNNN.dat) from
+  ! the transport step's sums (all ranks: a sum over them; the solid-angle
+  ! weights as the profiles), ell = alpha_mlt H_p of the background
+  subroutine turb_profile()
+    integer :: g
+    real(dp) :: ell
+    call arbor_sum_inplace(turb_acc)
+    do g = 1, n_r
+      turb_v(g) = turb_acc(g, 1)/max(turb_acc(g, 2), tiny(1.0_dp))
+      ell = alpha_mlt*p0(g)/(rho0(g)*g_c(g))
+      turb_eta(g) = turb_c_eta*turb_v(g)*ell/3.0_dp
+      turb_nu(g) = turb_c_nu*turb_v(g)*ell/3.0_dp
+      turb_gam(g) = -turb_c_gamma*turb_v(g)
+    end do
+  end subroutine turb_profile
 
   ! Let MPI move the ghost messages in flight (Open MPI's shared memory and
   ! most networks send large messages by rendezvous: the data moves only

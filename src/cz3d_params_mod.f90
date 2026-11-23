@@ -680,7 +680,45 @@ module cz3d_params_mod
   ! CZ top when the atmosphere is in the domain
   real(dp) :: diff_top_above_km = 50.0_dp
 
-  namelist /cz3d/ cond_limiter, cond_hot_to_cold, box_fine_from, H_B_rho_exp, va_cap_horizontal, overlap_fills, grey_atm_blocks, b_eta_radial, phot_band_file, phot_n_lambda, phot_lambda_A, phot_z_km, euv_dt, euv_at_end, euv_trac, euv_n_view, euv_npix, euv_lon_deg, euv_lat_deg, euv_fov_rsun, euv_table, b_smooth_cells, test_freeze_b, b_eta_dr, b_eta_cs, test_b_diff_only, b_diff_form, b_diffusion_h, b_diff_limiter, cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
+  ! --- turbulent transport of the unresolved convection (mean-field closure,
+  !     where MLT carries the flux; 2026-11-23, from CZTR_box 00420c3). Local,
+  !     per cell, from the cell's f_mlt v_MLT, v_MLT the mixing-length
+  !     velocity of the full (unswitched) MLT flux at the cell, F/f_mlt
+  !     (mlt_mod: F = 8 rho c_p T v^3/(g Q ell)), each step's transport (the
+  !     same state as the heat flux), so all three terms follow the MLT switch
+  !     and the local MLT flux (Gough & Tayler, mlt_gough_tayler, included)
+  !     and vanish where MLT carries nothing (MLT off, the atmosphere). With
+  !     ell = alpha_mlt H_p of the background (and turb_quench's q below):
+  !   - turb_c_eta > 0: eta_t = turb_c_eta f v ell/3 added to the cells'
+  !     eta of b_diff_form = 'resistive' (radial term implicit per column,
+  !     horizontal explicit; its Ohmic heat with diffusion_heating);
+  !   - turb_c_nu > 0: nu_t = turb_c_nu f v ell/3 on v (rho d_t v =
+  !     div(rho nu_t grad v), each spherical component as a scalar: the
+  !     curvature terms ~ nu_t/r^2 are negligible): horizontal explicit,
+  !     radial implicit per column; the kinetic energy it removes goes into s1
+  !     with diffusion_heating;
+  !   - turb_c_gamma > 0: downward pumping gamma_r = -turb_c_gamma f v in
+  !     the induction only, E = (v + gamma_r e_r) x B (explicit; 0 in the
+  !     ghosts beyond the walls, so it never carries field in through them).
+  ! Their horizontal means by height: out_dir/turb_NNNN.dat (with the profiles).
+  ! Literature values: eta_t ~ nu_t ~ v ell/3 (c ~ 1); near-surface pumping
+  ! ~ 20-50 m/s in flux-transport models (Karak & Cameron 2016). The radial
+  ! implicit terms need si_radial (whole columns per rank, si_z_km default).
+  real(dp) :: turb_c_eta = 0.0_dp, turb_c_nu = 0.0_dp, turb_c_gamma = 0.0_dp
+  ! mlt_gough_tayler (use_B): MLT with Gough & Tayler's (1966) criterion for
+  ! a vertical field: the superadiabaticity it sees is grad - grad_ad - delta,
+  ! delta = B_r^2/(B_r^2 + 4 pi Gamma_1 P) at each face (B_r^2 and Gamma_1 P
+  ! the means of the two cells), so convection needs grad - grad_ad > delta
+  ! and the strong radial field carries less flux (umbral darkening); the
+  ! turbulent closure (turb_c_*), from the MLT flux, follows. Default off
+  logical :: mlt_gough_tayler = .false.
+  ! turb_quench (use_B, turb_c_*): the closure's coefficients times
+  ! q = 1/(1 + B_h^2/B_eq^2), B_eq^2 = 4 pi rho v_MLT^2 (a heuristic for the
+  ! horizontal field; the radial field acts through mlt_gough_tayler on v_MLT
+  ! itself). Default off
+  logical :: turb_quench = .false.
+
+  namelist /cz3d/ turb_c_eta, turb_c_nu, turb_c_gamma, mlt_gough_tayler, turb_quench, cond_limiter, cond_hot_to_cold, box_fine_from, H_B_rho_exp, va_cap_horizontal, overlap_fills, grey_atm_blocks, b_eta_radial, phot_band_file, phot_n_lambda, phot_lambda_A, phot_z_km, euv_dt, euv_at_end, euv_trac, euv_n_view, euv_npix, euv_lon_deg, euv_lat_deg, euv_fov_rsun, euv_table, b_smooth_cells, test_freeze_b, b_eta_dr, b_eta_cs, test_b_diff_only, b_diff_form, b_diffusion_h, b_diff_limiter, cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
@@ -759,6 +797,20 @@ contains
     ! (local time stepping, dt1 > 0, works with the atmosphere: relaxation, e.g. of the wind)
     if (use_atmosphere .and. dt_budget > 0.0_dp) call arbor_abort('use_atmosphere needs dt_budget = 0')
     if (use_atmosphere .and. top_energy /= 'eddington') call arbor_abort('use_atmosphere needs top_energy = eddington')
+    if (min(turb_c_eta, turb_c_nu, turb_c_gamma) < 0.0_dp) call arbor_abort('turb_c_eta, turb_c_nu, turb_c_gamma must be >= 0')
+    if (max(turb_c_eta, turb_c_nu, turb_c_gamma) > 0.0_dp .and. .not. use_convection) &
+        call arbor_abort('turb_c_eta, turb_c_nu, turb_c_gamma need use_convection (their velocity is MLT''s)')
+    if (turb_c_eta > 0.0_dp .and. .not. (use_B .and. use_diffusion .and. b_diff_form == 'resistive' .and. si_radial)) &
+        call arbor_abort("turb_c_eta needs use_B, use_diffusion, b_diff_form = 'resistive' and si_radial")
+    if (turb_c_nu > 0.0_dp .and. .not. (si_radial .and. use_diffusion)) &
+        call arbor_abort('turb_c_nu needs si_radial (its radial term per column) and use_diffusion')
+    if (turb_c_nu > 0.0_dp .and. (si_z_km(1) > -1.0e29_dp .or. si_z_km(2) < 1.0e29_dp)) &
+        call arbor_abort('turb_c_nu needs the whole column implicit (si_z_km default)')
+    if (turb_c_gamma > 0.0_dp .and. .not. use_B) call arbor_abort('turb_c_gamma needs use_B')
+    if (max(turb_c_eta, turb_c_nu, turb_c_gamma) > 0.0_dp .and. (dt1 > 0.0_dp .or. mr_levels > 1)) &
+        call arbor_abort('turb_c_* need global steps (dt1 = 0, mr_levels <= 1): their profile is a sum over all ranks')
+    if (mlt_gough_tayler .and. .not. (use_B .and. use_convection)) call arbor_abort('mlt_gough_tayler needs use_B and use_convection')
+    if (turb_quench .and. .not. use_B) call arbor_abort('turb_quench needs use_B')
   end subroutine read_params
 
 end module cz3d_params_mod
