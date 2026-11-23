@@ -47,6 +47,12 @@ module cztr3d_atm_mod
   real(dp), allocatable, public :: Qloss_B(:,:,:,:), Qheat_B(:,:,:,:)   ! the last step's losses and heating [erg/cm3/s] (box output)
   ! the last step's s1 change by the conduction (box_fine_from: allocated by the caller)
   real(dp), allocatable, public :: ds1c_B(:,:,:,:)
+  ! cond_limiter = 'mc' in use (with cond_along_b and the field): the states and
+  ! the fill include the edge ghost cells
+  logical, public :: cond_mc_on = .false.
+  ! cond_hot_to_cold: faces with a conductive flux, and those set to 0 (counts,
+  ! and the sums of |q| [erg/cm2/s]); summed over the run (floors report)
+  real(dp), public :: hc_stat(4) = 0.0_dp
   ! the floors' action (atm_floors), summed over calls, per global radial cell:
   ! (1, i) cells checked, (2, i) rho floored, (3, i) T floored (timers_report prints them)
   ! (4, i) the energy the T floor added [erg] (rho T ds dV; Yin-Yang overlap cells count twice)
@@ -95,6 +101,7 @@ contains
     allocate(qr_B(0:nb(1), nb(2), nb(3), nBlockMax), qt_B(nb(1), 0:nb(2), nb(3), nBlockMax), &
         qp_B(nb(1), nb(2), 0:nb(3), nBlockMax), Qloss_B(nb(1), nb(2), nb(3), nBlockMax), Qheat_B(nb(1), nb(2), nb(3), nBlockMax))
     qr_B = 0.0_dp;  qt_B = 0.0_dp;  qp_B = 0.0_dp;  Qloss_B = 0.0_dp;  Qheat_B = 0.0_dp
+    cond_mc_on = cond_limiter == 'mc' .and. cond_along_b .and. use_B
     ! the ARBOR timers on every rank (arbor_timer_report is collective: a rank
     ! without atmosphere blocks must hold the same timers)
     if (tm_st == 0) then
@@ -136,14 +143,33 @@ contains
       do j = 1, nb(2)
         call column_states(ib, 0, nb(1) + 1, j, k)
       end do
-      call column_states(ib, 1, nb(1), 0, k)
-      call column_states(ib, 1, nb(1), nb(2) + 1, k)
+    end do
+    call ghost_states(ib)
+  end subroutine states
+
+  ! The horizontal ghost columns' states (cells 1..nb(1)); with cond_mc_on
+  ! also their radial ghosts and the theta-phi edge columns (the limited
+  ! gradients' diagonal neighbours)
+  subroutine ghost_states(ib)
+    integer, intent(in) :: ib
+    integer :: j, k, i0, i1
+    i0 = merge(0, 1, cond_mc_on);  i1 = merge(nb(1) + 1, nb(1), cond_mc_on)
+    do k = 1, nb(3)
+      call column_states(ib, i0, i1, 0, k)
+      call column_states(ib, i0, i1, nb(2) + 1, k)
     end do
     do j = 1, nb(2)
-      call column_states(ib, 1, nb(1), j, 0)
-      call column_states(ib, 1, nb(1), j, nb(3) + 1)
+      call column_states(ib, i0, i1, j, 0)
+      call column_states(ib, i0, i1, j, nb(3) + 1)
     end do
-  end subroutine states
+    if (cond_mc_on) then
+      do k = 0, nb(3) + 1, nb(3) + 1
+        do j = 0, nb(2) + 1, nb(2) + 1
+          call column_states(ib, 1, nb(1), j, k)
+        end do
+      end do
+    end if
+  end subroutine ghost_states
 
   ! Conduction, losses and heating of block ib over dt (ghosts filled;
   ! at_bot/at_top: the block holds the bottom/top wall of the domain);
@@ -162,6 +188,9 @@ contains
     ! interior cell's T gradient (gc), once instead of per face
     real(dp) :: sfr(0:nb(1)), scc(1:nb(1)), dbf(0:nb(1)), dbc(1:nb(1)), sth_j(1:nb(2)), &
         gc(3, nb(1), nb(2), nb(3))
+    ! cond_limiter = 'mc': the one-sided T gradients between neighbouring cells,
+    ! once per block (OsR: from i to i+1, OsT: from j to j+1, OsP: from k to k+1)
+    real(dp) :: OsR(0:nb(1), 0:nb(2)+1, 0:nb(3)+1), OsT(0:nb(1)+1, 0:nb(2), 0:nb(3)+1), OsP(0:nb(1)+1, 0:nb(2)+1, 0:nb(3))
     real(dp) :: Tf, rf, Tg, csf, cvf, dxf, vf, x, dQ, Sc, Sf, sth, dt, fS, qcl, gt(3), bf(3), aniso
     real(dp) :: colH(nb(1)), dr, qd, ionH, lT, w, nHt, QH, iH, QCa, iCa, QMg, iMg, chromo, coron, Qheat, Qlos, colm
     integer :: i, j, k, m
@@ -192,7 +221,26 @@ contains
       do j = 1, nb(2)
         sth_j(j) = sin(X2(j))
       end do
-      if (aniso > 0.0_dp) then
+      if (aniso > 0.0_dp .and. cond_mc_on) then
+        do k = 0, nb(3) + 1
+          do j = 0, nb(2) + 1
+            do i = 0, m
+              OsR(i, j, k) = (T_A(i+1, j, k) - T_A(i, j, k))/(r_c(i+1) - r_c(i))
+            end do
+            if (j <= nb(2)) then
+              do i = 0, m + 1
+                OsT(i, j, k) = (T_A(i, j+1, k) - T_A(i, j, k))/(r_c(i)*(X2(j+1) - X2(j)))
+              end do
+            end if
+            if (k <= nb(3)) then
+              do i = 0, m + 1
+                OsP(i, j, k) = (T_A(i, j, k+1) - T_A(i, j, k))/(r_c(i)*sin(X2(j))*(X3(k+1) - X3(k)))
+              end do
+            end if
+          end do
+        end do
+      end if
+      if (aniso > 0.0_dp .and. .not. cond_mc_on) then
         do k = 1, nb(3)
           do j = 1, nb(2)
             do i = 1, m
@@ -223,7 +271,14 @@ contains
             csf = 0.5_dp*(cs_A(i, j, k) + cs_A(i+1, j, k))
             cvf = 0.5_dp*(cv_A(i, j, k) + cv_A(i+1, j, k))
             Tg = (T_A(i+1, j, k) - T_A(i, j, k))/dxf
-            if (aniso > 0.0_dp) then
+            if (aniso > 0.0_dp .and. cond_mc_on) then
+              ! along the field, the components along the face limited (cond_limiter)
+              gt(1) = Tg
+              gt(2) = mc(mc(OsT(i, j, k), OsT(i, j-1, k)), mc(OsT(i+1, j, k), OsT(i+1, j-1, k)))
+              gt(3) = mc(mc(OsP(i, j, k), OsP(i, j, k-1)), mc(OsP(i+1, j, k), OsP(i+1, j, k-1)))
+              bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i+1, j, k, BR:BP, ib))
+              Tg = along_b(gt, bf, 1, dbf(i))
+            else if (aniso > 0.0_dp) then
               ! along the field: the face's (r, theta, phi) gradient (tangential
               ! parts from its interior cells' central differences)
               gt = 0.0_dp;  x = 0.0_dp
@@ -242,6 +297,7 @@ contains
                   *0.5_dp*(State_GVB(i, j, k, VR, ib) + State_GVB(i+1, j, k, VR, ib))
             end if
             call face_flux(Sf, Tf, rf, csf, cvf, Tg, dxf, vf, qr_B(i, j, k, ib), fS, qcl)
+            if (cond_hot_to_cold) call hot_to_cold(qr_B(i, j, k, ib), T_A(i+1, j, k) - T_A(i, j, k))
             F1(i, j, k, 1) = qr_B(i, j, k, ib)
           end do
         end do
@@ -260,7 +316,13 @@ contains
             csf = 0.5_dp*(cs_A(i, j, k) + cs_A(i, j+1, k))
             cvf = 0.5_dp*(cv_A(i, j, k) + cv_A(i, j+1, k))
             Tg = (T_A(i, j+1, k) - T_A(i, j, k))/(r_c(i)*dxf)
-            if (aniso > 0.0_dp) then
+            if (aniso > 0.0_dp .and. cond_mc_on) then
+              gt(2) = Tg
+              gt(1) = mc(mc(OsR(i, j, k), OsR(i-1, j, k)), mc(OsR(i, j+1, k), OsR(i-1, j+1, k)))
+              gt(3) = mc(mc(OsP(i, j, k), OsP(i, j, k-1)), mc(OsP(i, j+1, k), OsP(i, j+1, k-1)))
+              bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i, j+1, k, BR:BP, ib))
+              Tg = along_b(gt, bf, 2, dbc(i))
+            else if (aniso > 0.0_dp) then
               gt = 0.0_dp;  x = 0.0_dp
               if (j >= 1) then;  gt = gt + gc(:, i, j, k);  x = x + 1.0_dp;  end if
               if (j + 1 <= nb(2)) then;  gt = gt + gc(:, i, j+1, k);  x = x + 1.0_dp;  end if
@@ -272,6 +334,7 @@ contains
             fS = 1.0_dp
             if (cond_r_rsun > 0.0_dp) fS = 1.0_dp/(1.0_dp + (r_c(i)/(cond_r_rsun*Rsun_atm))**2)
             call face_flux(Sc, Tf, rf, csf, cvf, Tg, r_c(i)*dxf, vf, qt_B(i, j, k, ib), fS, 0.0_dp)
+            if (cond_hot_to_cold) call hot_to_cold(qt_B(i, j, k, ib), T_A(i, j+1, k) - T_A(i, j, k))
             F2(i, j, k, 1) = qt_B(i, j, k, ib)
           end do
         end do
@@ -293,7 +356,13 @@ contains
             csf = 0.5_dp*(cs_A(i, j, k) + cs_A(i, j, k+1))
             cvf = 0.5_dp*(cv_A(i, j, k) + cv_A(i, j, k+1))
             Tg = (T_A(i, j, k+1) - T_A(i, j, k))/(r_c(i)*sth*dxf)
-            if (aniso > 0.0_dp) then
+            if (aniso > 0.0_dp .and. cond_mc_on) then
+              gt(3) = Tg
+              gt(1) = mc(mc(OsR(i, j, k), OsR(i-1, j, k)), mc(OsR(i, j, k+1), OsR(i-1, j, k+1)))
+              gt(2) = mc(mc(OsT(i, j, k), OsT(i, j-1, k)), mc(OsT(i, j, k+1), OsT(i, j-1, k+1)))
+              bf = 0.5_dp*(State_GVB(i, j, k, BR:BP, ib) + State_GVB(i, j, k+1, BR:BP, ib))
+              Tg = along_b(gt, bf, 3, dbc(i))
+            else if (aniso > 0.0_dp) then
               gt = 0.0_dp;  x = 0.0_dp
               if (k >= 1) then;  gt = gt + gc(:, i, j, k);  x = x + 1.0_dp;  end if
               if (k + 1 <= nb(3)) then;  gt = gt + gc(:, i, j, k+1);  x = x + 1.0_dp;  end if
@@ -305,6 +374,7 @@ contains
             fS = 1.0_dp
             if (cond_r_rsun > 0.0_dp) fS = 1.0_dp/(1.0_dp + (r_c(i)/(cond_r_rsun*Rsun_atm))**2)
             call face_flux(Sc, Tf, rf, csf, cvf, Tg, r_c(i)*sth*dxf, vf, qp_B(i, j, k, ib), fS, 0.0_dp)
+            if (cond_hot_to_cold) call hot_to_cold(qp_B(i, j, k, ib), T_A(i, j, k+1) - T_A(i, j, k))
             F3(i, j, k, 1) = qp_B(i, j, k, ib)
           end do
         end do
@@ -340,6 +410,20 @@ contains
     end associate
 
   contains
+
+    ! cond_hot_to_cold: the face flux q (positive towards the cell with the
+    ! larger index) set to 0 if it carries heat from the colder cell to the
+    ! hotter one (dT = T(next) - T(this)); counted in hc_stat
+    subroutine hot_to_cold(q, dT)
+      real(dp), intent(inout) :: q
+      real(dp), intent(in) :: dT
+      if (q == 0.0_dp) return
+      hc_stat(1) = hc_stat(1) + 1.0_dp;  hc_stat(3) = hc_stat(3) + abs(q)
+      if (q*dT > 0.0_dp) then
+        hc_stat(2) = hc_stat(2) + 1.0_dp;  hc_stat(4) = hc_stat(4) + abs(q)
+        q = 0.0_dp
+      end if
+    end subroutine hot_to_cold
 
     ! The (r, theta, phi) gradient of T at interior cell (i, j, k) of the block
     ! (central differences; the ghost layers next to the interior are filled)
@@ -524,13 +608,8 @@ contains
         if (at_bot) call column_states(ib, 0, 0, j, k)
         if (at_top) call column_states(ib, m + 1, m + 1, j, k)
       end do
-      call column_states(ib, 1, m, 0, k)
-      call column_states(ib, 1, m, nb(2) + 1, k)
     end do
-    do j = 1, nb(2)
-      call column_states(ib, 1, m, j, 0)
-      call column_states(ib, 1, m, j, nb(3) + 1)
-    end do
+    call ghost_states(ib)
   end subroutine states_from_store
 
   ! Does block ib have atmosphere work (atm_block's own test)?
@@ -540,6 +619,12 @@ contains
     m = nb(1)
     atm_active = .not. (maxval(atm_switch(z_c(1:m))) < 1.0e-8_dp .and. atm_switch(r_f(m) - r_top_cz) < 1.0e-8_dp)
   end function atm_active
+
+  ! The monotonized-central limiter: minmod(2a, 2b, (a + b)/2)
+  pure real(dp) function mc(a, b)
+    real(dp), intent(in) :: a, b
+    mc = merge(sign(min(2.0_dp*abs(a), 2.0_dp*abs(b), 0.5_dp*abs(a + b)), a), 0.0_dp, a*b > 0.0_dp)
+  end function mc
 
   ! |B| for the field-strength heating, saturated at H_B_sat_G (> 0)
   real(dp) function bsat(b)

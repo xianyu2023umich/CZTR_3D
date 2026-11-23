@@ -28,7 +28,7 @@ module cz3d_app_mod
   use cz3d_bg_mod, only: k_join, n_r, n_c, bg_view, r_c, r_f, drdxi_c, rho0, s0, p0, lnp0, g_c, z_c, ds0dr, rho1_init, s1_init, &
       v_init, tab, area_f, xi, T0, ddr_c, cs0, vol_c, r_top_cz
   use cz3d_transport_mod, only: transport_column, grey_atm_column, cool_f, cool_c, grey_i0, tr_view, col_bottom, col_top
-  use cztr3d_atm_mod, only: ds1c_B, atm_losses, states_interior, atm_active, atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce, atm_switch, trac_f
+  use cztr3d_atm_mod, only: cond_mc_on, ds1c_B, atm_losses, states_interior, atm_active, atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce, atm_switch, trac_f
   use eos_types, only: eos_state
   use eos_thermo, only: eos_get_from_rho_T
   use const_mod, only: Lsun
@@ -1347,7 +1347,7 @@ contains
       ! fill refreshes every variable before anything else does)
       atm_ovl = overlap .and. si_cols .and. (use_losses .or. use_heating)
       if (atm_ovl) then
-        call arbor_fill_ghosts_begin(State_GVB, iVarMax=merge(psi_ - 1, nv, use_B), n_ghost=2, faces_only=.true., &
+        call arbor_fill_ghosts_begin(State_GVB, iVarMax=merge(psi_ - 1, nv, use_B), n_ghost=2, faces_only=.not. cond_mc_on, &
             time=t + dt)
         call toc(T_G_ATM)
         call toc(T_GHOST)
@@ -1370,7 +1370,8 @@ contains
         call tic(T_G_ATM)
         call arbor_fill_ghosts_end(State_GVB)
       else
-        call arbor_fill_ghosts(State_GVB, iVarMax=merge(psi_ - 1, nv, use_B), n_ghost=2, faces_only=.true., time=t + dt)
+        call arbor_fill_ghosts(State_GVB, iVarMax=merge(psi_ - 1, nv, use_B), n_ghost=2, faces_only=.not. cond_mc_on, &
+            time=t + dt)          ! (cond_limiter = 'mc': the edge ghosts too)
       end if
       call toc(T_G_ATM)
       call tic(T_G_JOIN)

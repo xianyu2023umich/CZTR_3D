@@ -1,0 +1,38 @@
+! Step-2 crash test, A6 (2026-11-23): dbgA (H_B on, the field-aligned
+! conduction) with the slope-limited conduction (cond_limiter = 'mc', Sharma
+! & Hammett 2007), 1200 steps (past the crash at 811660), the box on the
+! crash column with the operators' increments every step from 811600.
+! A5 showed the unlimited conduction draining one cell below its neighbours.
+! Run with mhd047_cpl_nohb_mc in one job: tools/job.stampede3_seq.
+&cz3d
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/mhd047_czdt'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/mhd047_dbgA6'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0, grey_atm_blocks = 1
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  rsst_depth_km = 500.0, rsst_q = 0.0, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .true., freeze_side = 'none', atm_match_base = .true.
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7, H_c = 3.0e-5, lambda_c_km = 4.0e4
+  H_B = 4.0e-5, lambda_B_km = 4.0e4, n_gate = 2.0e11, H_B_sat_G = 50.0
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'dpf', dpf_maxit = 5000, b_seed_rss_rsun = 2.5, b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  b_smooth_cells = 1.0
+  cond_along_b = .true., cond_limiter = 'mc', cond_dB0_G = 10.0, si_alfven = .true., wave_cfl_cs_only = .true.
+  va_dt_target = 1.0, va_floor_cs = 1.5, b_diff_form = 'resistive', b_eta_dr = 1.0
+  dt1 = 0.0, mr_levels = 0
+  si_radial = .true., wave_cfl_max = 1.0, trac_Tc = 5.0e5, trac_Tlow = 1.2e4
+  t_end = 1.0e9, n_step_max = 1200, dt_max = 20.0
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 0.0
+  dump_shells = 196, 197, 225, 244, 252, 280, 350, 450
+  box_lat_deg = 12.09, box_lon_deg = 150.45, box_radius_deg = 1.5, box_z_km = 0.0, 10000.0, box_every = 10, box_fine_from = 811600
+  euv_dt = 0.0, euv_n_view = 4, euv_lon_deg = 0.0, 90.0, 180.0, 270.0, euv_lat_deg = 0.0, 0.0, 0.0, 0.0
+  euv_npix = 512, euv_fov_rsun = 1.3, euv_table = 'data/aia_response_uv.dat'
+  wall_time_margin = 900.0
+/

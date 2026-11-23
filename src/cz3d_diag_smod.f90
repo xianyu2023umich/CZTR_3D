@@ -521,6 +521,17 @@ contains
           ' x 1e3 erg/cm2/s over the sphere (Yin-Yang overlap counted twice, ~+6%)'
       call arbor_print(msg)
     end if
+    if (cond_hot_to_cold) then
+      block
+        use cztr3d_atm_mod, only: hc_stat
+        real(dp) :: hs(4)
+        hs = hc_stat
+        call arbor_sum_inplace(hs)
+        write(msg, '(A,ES10.3,A,F8.5,A,F8.5,A)') '    cond_hot_to_cold: ', hs(1), ' face fluxes, set to 0: ', &
+            hs(2)/max(hs(1), 1.0_dp), ' of them, ', hs(4)/max(hs(3), tiny(1.0_dp)), ' of their sum of |q|'
+        call arbor_print(msg)
+      end block
+    end if
     ! for comparison: the radiative losses and the heating (the last step's
     ! Qloss_B, Qheat_B) integrated over the floor's heights, z 0 .. 1200 km
     block
