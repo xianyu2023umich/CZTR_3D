@@ -470,7 +470,8 @@ contains
               if (H_c > 0.0_dp) Qheat = Qheat + Sc*H_c*exp(-max(z_c(i), 0.0_dp)/(lambda_c_km*1.0e5_dp))
               if (H_ext > 0.0_dp) Qheat = Qheat + Sc*H_ext*exp(-max(z_c(i), 0.0_dp)/(lambda_ext_rsun*Rsun_atm))
               if (H_B > 0.0_dp .and. use_B) Qheat = Qheat + Sc*H_B*bsat(norm2(State_GVB(i, j, k, BR:BP, ib))) &
-                  *exp(-max(z_c(i), 0.0_dp)/(lambda_B_km*1.0e5_dp))/(1.0_dp + (ne_A(i, j, k)/n_gate)**4)
+                  *exp(-max(z_c(i), 0.0_dp)/(lambda_B_km*1.0e5_dp))/(1.0_dp + (ne_A(i, j, k)/n_gate)**4) &
+                  *merge(min(1.0_dp, rho_A(i, j, k)/rho0(i))**H_B_rho_exp, 1.0_dp, H_B_rho_exp > 0.0_dp)
             end if
           end if
           Qloss_B(i, j, k, ib) = Qlos
