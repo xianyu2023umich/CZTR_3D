@@ -380,9 +380,10 @@ contains
     integer, intent(in) :: iStep
     real(dp), intent(in) :: t
     call tic(T_AFTER)
+    step_now = iStep
     if (probe_radius_deg > 0.0_dp) call probe_write(iStep, t)
     if (box_radius_deg > 0.0_dp .and. box_every > 0) then
-      if (mod(iStep, box_every) == 0) call box_write(iStep, t)
+      if (mod(iStep, box_every) == 0 .or. (box_fine_from > 0 .and. iStep >= box_fine_from)) call box_write(iStep, t)
     end if
     if (euv_dt > 0.0_dp) then
       if (t_next_euv == -huge(1.0_dp)) t_next_euv = t
@@ -684,11 +685,13 @@ contains
     integer, intent(in) :: iStep
     real(dp), intent(in) :: t
     integer, save :: u = 0
-    real(dp) :: x0(3), x(3), e(3,3), la, lo, out(n_field), rho, cs, Tc, p, b(3), v(3), b2, qh, ql, zz
+    real(dp) :: x0(3), x(3), e(3,3), la, lo, out(n_field), rho, cs, Tc, p, b(3), v(3), b2, qh, ql, zz, ops(9)
+    logical :: fine
     integer :: jb, ib, i, j, k
     character(len=300) :: name
     la = box_lat_deg*pi/180.0_dp;  lo = box_lon_deg*pi/180.0_dp
     x0 = [cos(la)*cos(lo), cos(la)*sin(lo), sin(la)]
+    fine = ops_on .and. allocated(ops_B)
     do jb = 1, nBlock
       ib = iBlockList_I(jb)
       call cz_bind(ib)
@@ -703,7 +706,10 @@ contains
             write(name, '(A,A,I4.4,A)') trim(out_dir), '/box_r', my_rank, '.dat'
             open(newunit=u, file=trim(name), status='replace', action='write')
             write(u, '(A)') '# step t[s] cell z[km] lat lon patch rho[g/cm3] T[K] vx vy vz[cm/s] Bx By Bz[G] (global Cartesian) ' // &
-                'beta Mach Q_heat Q_loss[erg/cm3/s]'
+                'beta Mach Q_heat Q_loss[erg/cm3/s]  (box_fine_from, from that step on: + dt[s], the step''s change of s1 ' // &
+                '[erg/g/K] by the RK hydro step, the transport, the conduction, the losses and heating, the diffusion, ' // &
+                'the rest (floors, walls, GLM, friction), and of v_r [cm/s] by the RK step, the diffusion, the rest; then the ' // &
+                'cell''s s1 and v_r (full precision))'
           end if
           do i = 1, nb(1)
             zz = z_c(i)/1.0e5_dp
@@ -722,9 +728,20 @@ contains
             if (allocated(Qheat_B) .and. r_off + i > k_join) then
               qh = Qheat_B(i, j, k, ib);  ql = Qloss_B(i, j, k, ib)
             end if
-            write(u, '(I9,ES15.7,I5,F11.1,2F9.3,I2,14ES12.4)') iStep, t, r_off + i, zz, &
-                asin(max(-1.0_dp, min(1.0_dp, x(3))))*180.0_dp/pi, atan2(x(2), x(1))*180.0_dp/pi, Key_IB(KP, ib), &
-                rho, Tc, v, b, p/max(b2/(8.0_dp*pi), tiny(1.0_dp)), norm2(v)/cs, qh, ql
+            if (fine) then
+              associate (o => ops_B(i, j, k, :, ib))
+                ops = [o(2) - o(1), o(3) - o(2), ds1c_B(i, j, k, ib), o(4) - o(3) - ds1c_B(i, j, k, ib), o(5) - o(4), &
+                    State_GVB(i, j, k, s1_, ib) - o(5), o(7) - o(6), o(8) - o(7), State_GVB(i, j, k, vr_, ib) - o(8)]
+              end associate
+              write(u, '(I9,ES15.7,I5,F11.1,2F9.3,I2,12ES12.4,ES11.3,9ES12.4,2ES24.15E3)') iStep, t, r_off + i, zz, &
+                  asin(max(-1.0_dp, min(1.0_dp, x(3))))*180.0_dp/pi, atan2(x(2), x(1))*180.0_dp/pi, Key_IB(KP, ib), &
+                  rho, Tc, v, b, p/max(b2/(8.0_dp*pi), tiny(1.0_dp)), norm2(v)/cs, qh, ql, dt_last, ops, &
+                  State_GVB(i, j, k, s1_, ib), State_GVB(i, j, k, vr_, ib)
+            else
+              write(u, '(I9,ES15.7,I5,F11.1,2F9.3,I2,14ES12.4)') iStep, t, r_off + i, zz, &
+                  asin(max(-1.0_dp, min(1.0_dp, x(3))))*180.0_dp/pi, atan2(x(2), x(1))*180.0_dp/pi, Key_IB(KP, ib), &
+                  rho, Tc, v, b, p/max(b2/(8.0_dp*pi), tiny(1.0_dp)), norm2(v)/cs, qh, ql
+            end if
           end do
         end do
       end do

@@ -45,6 +45,8 @@ module cztr3d_atm_mod
   ! relaxing conductive fluxes (faces in r, theta, phi) and the last losses per block slot
   real(dp), allocatable :: qr_B(:,:,:,:), qt_B(:,:,:,:), qp_B(:,:,:,:)
   real(dp), allocatable, public :: Qloss_B(:,:,:,:), Qheat_B(:,:,:,:)   ! the last step's losses and heating [erg/cm3/s] (box output)
+  ! the last step's s1 change by the conduction (box_fine_from: allocated by the caller)
+  real(dp), allocatable, public :: ds1c_B(:,:,:,:)
   ! the floors' action (atm_floors), summed over calls, per global radial cell:
   ! (1, i) cells checked, (2, i) rho floored, (3, i) T floored (timers_report prints them)
   ! (4, i) the energy the T floor added [erg] (rho T ds dV; Yin-Yang overlap cells count twice)
@@ -315,6 +317,7 @@ contains
             if (dQ == 0.0_dp) cycle
             x = dQ/(rho_A(i, j, k)*cv_A(i, j, k)*T_A(i, j, k))
             State_GVB(i, j, k, S1, ib) = State_GVB(i, j, k, S1, ib) + cv_A(i, j, k)*log(1.0_dp + max(x, -0.9_dp))
+            if (allocated(ds1c_B)) ds1c_B(i, j, k, ib) = cv_A(i, j, k)*log(1.0_dp + max(x, -0.9_dp))
           end do
         end do
       end do

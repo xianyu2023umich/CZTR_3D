@@ -28,7 +28,7 @@ module cz3d_app_mod
   use cz3d_bg_mod, only: k_join, n_r, n_c, bg_view, r_c, r_f, drdxi_c, rho0, s0, p0, lnp0, g_c, z_c, ds0dr, rho1_init, s1_init, &
       v_init, tab, area_f, xi, T0, ddr_c, cs0, vol_c, r_top_cz
   use cz3d_transport_mod, only: transport_column, grey_atm_column, cool_f, cool_c, grey_i0, tr_view, col_bottom, col_top
-  use cztr3d_atm_mod, only: atm_losses, states_interior, atm_active, atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce, atm_switch, trac_f
+  use cztr3d_atm_mod, only: ds1c_B, atm_losses, states_interior, atm_active, atm_setup, atm_block, atm_floors, atm_dt, atm_tr_heights, S_bgf, bgforce, atm_switch, trac_f
   use eos_types, only: eos_state
   use eos_thermo, only: eos_get_from_rho_T
   use const_mod, only: Lsun
@@ -159,6 +159,11 @@ module cz3d_app_mod
   ! 8 dr [km]; reset after each step (cz_after_step)
   real(dp) :: dtl(3, 8) = huge(1.0_dp)
   real(dp) :: dt_run = 0.0_dp            ! model time advanced in this run (floors_report)
+  ! box_fine_from: the last completed step (main sets it at the start, cz_after_step after each step),
+  ! and the step's snapshots of s1 and v_r between the operators (ops_snap)
+  integer, public :: step_now = 0
+  real(dp), allocatable :: ops_B(:,:,:,:,:)
+  logical :: ops_on = .false.
   real(dp) :: eta_cap_n(2) = 0.0_dp      ! b_eta_radial = 'explicit': cells capped, cells (summed over steps)
 
   ! ---- energy budget per radial shell (dt_budget > 0) ----
@@ -1128,6 +1133,14 @@ contains
     real(dp), parameter :: c_stage(4) = [0.0_dp, 0.25_dp, 1.0_dp/3.0_dp, 0.5_dp]
     call tic(T_ADV)
     dt_run = dt_run + dt
+    ! box_fine_from: the operators' increments of this step
+    ops_on = box_fine_from > 0 .and. step_now + 1 >= box_fine_from
+    if (ops_on) then
+      if (.not. allocated(ops_B)) allocate(ops_B(nb(1), nb(2), nb(3), 8, size(State_GVB, 5)))
+      if (.not. allocated(ds1c_B)) allocate(ds1c_B(nb(1), nb(2), nb(3), size(State_GVB, 5)))
+      ds1c_B = 0.0_dp
+      call ops_snap(1, 6)                                ! the step's start
+    end if
     call local_steps(dt)
     dt_now = dt
     if (test_freeze_b .and. use_B .and. .not. allocated(fzb_B)) then
@@ -1321,9 +1334,11 @@ contains
         call budget_hydro(iBlocks(jb), dt)
       end do
     end if
+    if (ops_on) call ops_snap(2, 7)                    ! after the RK step (and the column solves)
     call tic(T_TRANS)
     call cz_transport_all(iBlocks, dt, .false., t + dt)
     call toc(T_TRANS)
+    if (ops_on) call ops_snap(3, 0)                    ! after the transport
     if (use_atmosphere) then
       ! conduction (the ghosts in every direction), losses, heating
       call tic(T_GHOST)
@@ -1371,6 +1386,7 @@ contains
       call cz_unbind()
       call toc(T_ATM)
     end if
+    if (ops_on) call ops_snap(4, 0)                    ! after the atmosphere
     if (use_diffusion) then
       ! (b_diff_form = 'resistive': the edge ghosts too, for the tangential derivatives at block faces)
       call tic(T_GHOST)
@@ -1417,6 +1433,7 @@ contains
       call toc(T_D_SIP)
       call toc(T_DIFF)
     end if
+    if (ops_on) call ops_snap(5, 8)                    ! after the diffusion
     ! the atmosphere's floors (rho_floor; T_floor where atm_switch > 0.5), once
     ! per step after all the operators (the floors report counts their action)
     if (use_atmosphere) then
@@ -1519,6 +1536,15 @@ contains
     end if
     call toc(T_ADV)
   contains
+    ! box_fine_from: s1 into slot ks, v_r into slot kv (0: none) of every local block
+    subroutine ops_snap(ks, kv)
+      integer, intent(in) :: ks, kv
+      integer :: q
+      do q = 1, size(iBlocks)
+        ops_B(:, :, :, ks, iBlocks(q)) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), s1_, iBlocks(q))
+        if (kv > 0) ops_B(:, :, :, kv, iBlocks(q)) = State_GVB(1:nb(1), 1:nb(2), 1:nb(3), vr_, iBlocks(q))
+      end do
+    end subroutine ops_snap
     ! the friction's weight at height z [cm] (see v_damp_below_km)
     real(dp) function damp_weight(z) result(w)
       real(dp), intent(in) :: z

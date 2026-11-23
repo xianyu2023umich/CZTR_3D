@@ -1,0 +1,40 @@
+#!/bin/bash
+# cztr3d.x on Stampede3: several short runs one after another in one job (one
+# queue wait for a set of tests, e.g. the step-2 crash diagnosis runs). Each
+# namelist runs to its end or its crash; the next one starts either way. No
+# chain logic (run_status, restarts): for tests from an import or a restart.
+#
+#   sbatch -N 6 --ntasks-per-node 96 -t 01:30:00 tools/job.stampede3_seq runs/a.nml runs/b.nml ...
+#
+# The wall time must cover all runs (the job's remaining time is passed to
+# each run as CZ3D_WALL_TIME_MAX, as in tools/job.stampede3_spr4). Build and
+# modules: see tools/job.stampede3.
+
+#SBATCH -J cz3dseq
+#SBATCH -o cz3d.o%j
+#SBATCH -e cz3d.e%j
+#SBATCH -p spr
+#SBATCH -N 6
+#SBATCH --ntasks-per-node 96
+#SBATCH -t 01:30:00
+
+[ $# -ge 1 ] || { echo "usage: sbatch tools/job.stampede3_seq <namelist> [<namelist> ...]"; exit 1; }
+cd "$SLURM_SUBMIT_DIR"
+cfg() { sed -n "s/^$1 *= *//p" config.mk | head -1; }
+[ -f config.mk ] || { echo "job: no config.mk (run ./configure)"; exit 1; }
+mods=$(cfg MODULES | tr ':' ' ')
+if [ -n "$mods" ]; then module purge; module load $mods; fi
+ulimit -s unlimited
+export OMP_NUM_THREADS=1
+export UCX_LOG_LEVEL=ERROR
+
+for nml in "$@"; do
+  out_dir=$(sed -n "s/^ *out_dir *= *'\([^']*\)'.*/\1/p" "$nml" | head -1)
+  left=$(squeue -h -j "$SLURM_JOB_ID" -o %L 2>/dev/null || true)
+  secs=$(echo "$left" | awk -F'[-:]' 'NF {n = NF; s = $n + 60*$(n-1); if (n >= 3) s += 3600*$(n-2); if (n >= 4) s += 86400*$(n-3); print int(s)}')
+  if [ "${secs:-0}" -gt 0 ] 2>/dev/null; then export CZ3D_WALL_TIME_MAX=$secs; fi
+  echo "job $SLURM_JOB_ID: $(date '+%H:%M:%S') start $nml (out_dir $out_dir; time left $left)"
+  ibrun ./$(cfg EXE) "$nml"
+  rc=$?
+  echo "job $SLURM_JOB_ID: $(date '+%H:%M:%S') end $nml (exit $rc; $(head -1 "$out_dir/run_status.txt" 2>/dev/null || echo 'no run_status: crashed or stopped'))"
+done

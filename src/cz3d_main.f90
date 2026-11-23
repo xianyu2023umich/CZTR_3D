@@ -220,6 +220,7 @@ program cz3d_run
   call cz_transport_all(iBlockList_I(1:nBlock), 0.0_dp, &
       .not. (qconv_face .and. len_trim(restart_from) > 0 .and. .not. regridded))
   call budget_start(t)
+  step_now = i_step                                ! (box_fine_from: the last completed step)
   call cz_log(i_step, t)
   if ((dt_prof > 0.0_dp .or. prof_every > 0) .and. .not. restarted .and. t >= t_next_prof) call cz_profile(i_step, t)
 
