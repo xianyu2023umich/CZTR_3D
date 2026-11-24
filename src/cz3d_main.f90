@@ -127,7 +127,10 @@ program cz3d_run
     end if
     if (use_atmosphere .and. atm_match_base) call cz_match_base()
   else
-    call arbor_tree_init(tree, dom, [0, 0, 0])
+    ! (the tree allows the horizontal levels refine_horizontally adds below:
+    ! the leaf order depends on l_max, so a tree built with l_max = 0 is not
+    ! in the refined tree's order, 'keys not in tree order')
+    call arbor_tree_init(tree, dom, [0, max(refine_h, patch_level), max(refine_h, patch_level)])
     call arbor_block_sync(tree)
     call arbor_ghost_build(tree, dom, bc=wall_bc, bounded=.true.)   ! no negative Yin-Yang ghosts (ARBOR 831b389)
     call cz_setup()
