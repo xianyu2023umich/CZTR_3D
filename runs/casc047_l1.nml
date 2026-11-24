@@ -15,12 +15,16 @@
 !   reduced Mach ~0.06-0.09 expected (from the 0.47 deg profile).
 ! - B diffusion: resistive, eta = |v| dr/2 (b_eta_dr 1; needs si_radial).
 !   va_max 10 km/s (mhd5's): if the deep v_A reaches it, it sets dt.
-! - Rotation: solar, omega_rot 2.6e-6 (414 nHz), the full Coriolis term (split).
+! - Rotation: solar, omega_rot 2.6e-6 (414 nHz), the full Coriolis term (split);
+!   the global L_z correction every 20 steps (notes/rotation.md: the scheme's
+!   torque ~-2.8 nHz/yr of mean rotation without it, ~1e-4 nHz with it).
 ! Expected dt ~200 s (1.875 tests: 224-230 s); ~1.6e5 steps per model year; cost
 ! ~0.15 SU per model day (~55 SU per year) at 1.75 us/cell-step on SPR.
-! 1152 columns at 0.47 deg (si_radial: whole columns per rank): 2 nodes x 96
-! ranks give 6 each; ~10 h per model year if the estimate holds.
-!   sbatch -N 2 --ntasks-per-node 96 -t 48:00:00 tools/job.stampede3_spr4 runs/casc047_l1.nml
+! 1152 columns at 0.47 deg (si_radial: whole columns per rank, so the node
+! count should divide 1152/96 = 12: 2, 3, 4, 6 or 12 nodes, not 8): 6 nodes
+! x 96 ranks give 2 each (the mhd047 runs' layout), ~3.5-4.5 h per model year
+! if the estimate holds (2 nodes: ~10-13 h).
+!   sbatch -N 6 --ntasks-per-node 96 -t 12:00:00 tools/job.stampede3_spr4 runs/casc047_l1.nml
 ! Watch log.txt (dt, max Mach and reduced Mach, max |B|, div B), the
 ! profiles (flux, rms v, rms B), the shell dumps below the top (B_h piling up
 ! under the conductor).
@@ -38,7 +42,7 @@
   use_atmosphere = .false.
   use_B = .true., b_seed = 'toroidal', b_seed_G = 100.0, b_seed_r1_rsun = 0.92, b_seed_r2_rsun = 0.95, b_bc_bottom = 'conductor', b_bc_top = 'conductor', va_max = 1.0e6
   si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
-  omega_rot = 2.6e-6
+  omega_rot = 2.6e-6, lz_correct_steps = 20
   dt1 = 0.0, mr_levels = 0
   t_end = 3.156e7, n_step_max = 100000000, dt_max = 1.0e4
   n_log = 100, dt_prof = 0.0, prof_every = 432, plot_dt = 0.0, restart_dt = 1728000.0
