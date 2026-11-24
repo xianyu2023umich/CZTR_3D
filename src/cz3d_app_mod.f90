@@ -75,6 +75,7 @@ module cz3d_app_mod
   integer, allocatable :: imp_key(:,:), imp_file(:)
   integer(i8), allocatable :: imp_pos(:)
   integer :: imp_nb(3) = 0, imp_nv = 0
+  integer, public :: imp_top = 0          ! (the export's top cell: the cascade)
   real(dp) :: dtheta = 0.0_dp                     ! angular cell size (Yin-Yang: the same in theta and phi)
   ! rq(i): the physical density perturbation is rq rho1 (rsst_form =
   ! 'hotta2015': 1/xi^2, rho1 being the scaled xi^2 rho1; else 1). The

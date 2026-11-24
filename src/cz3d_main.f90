@@ -119,6 +119,12 @@ program cz3d_run
     write(msg, '(A,A,A,I0,A,I0,A,L1)') '  imported from ', trim(import_dir), ': ', tree%n_leaf, ' blocks, step ', i_step, &
         ', time and clocks restored: ', have_rst
     call arbor_print(msg)
+    if (imp_top < n_r .and. .not. use_atmosphere) then
+      write(msg, '(A,I0,A,I0,A,I0,A,F9.1,A,F9.1,A)') '  cascade: the export ends at cell ', imp_top, '; cells ', imp_top + 1, &
+          '..', n_r, ' (z ', (r_f(imp_top) - r_top_cz)/1.0e5_dp, ' .. ', (r_f(n_r) - r_top_cz)/1.0e5_dp, &
+          ' km) from the init file'
+      call arbor_print(msg)
+    end if
     if (use_atmosphere .and. atm_match_base) call cz_match_base()
   else
     call arbor_tree_init(tree, dom, [0, 0, 0])

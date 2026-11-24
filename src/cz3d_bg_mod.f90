@@ -39,6 +39,10 @@ module cz3d_bg_mod
       s0_g(:), T0_g(:), p0_g(:), lnp0_g(:), g_c_g(:), z_c_g(:), g_f_g(:), ds0dr_g(:), cs0_g(:), xi_g(:), &
       rho1_init_g(:), s1_init_g(:), v_init_g(:)
   real(dp), public :: r_top_cz = 0.0_dp
+  ! the background's z and sound speed in cells 1..k_join of the whole 1D
+  ! profile (bg_load), whatever n_r: set_rsst anchors at a depth also above
+  ! a deep top (the radial cascade: one RSST through all levels; as CZTR_box)
+  real(dp), allocatable :: z_cz(:), cs_cz(:)
 
   public :: bg_load, set_rsst, ddr_c, ddr_f, face_value, bg_view
 
@@ -127,6 +131,14 @@ contains
     end do
     ds0dr = ddr_c(s0)
     xi = 1.0_dp
+    ! the CZ part of the whole profile (z, c_s), for set_rsst
+    allocate(z_cz(k_join), cs_cz(k_join))
+    do j = 1, k_join
+      z_cz(j) = row(2, j)*1.0e5_dp
+      w = eos_s_from_rho_T(tab, row(6, j), row(7, j), s_guess=s0(min(j, n_r)))
+      call eos_eval(tab, row(6, j), w, out)
+      cs_cz(j) = sqrt(out(F_GAMMA1)*exp(out(F_LNP))/row(6, j))
+    end do
 
     ! initial state (cells 1..n_r; ghosts are set by the boundary conditions)
     rho1_init = 0.0_dp
@@ -160,12 +172,23 @@ contains
     if (present(depth_km)) then
       if (depth_km > 0.0_dp) then
         zd = -depth_km*1.0e5_dp
-        if (zd < z_c(1) .or. zd > z_c(n_r)) stop 'set_rsst: rsst_depth_km outside the domain'
-        do k = 1, n_r - 1
-          if (z_c(k+1) >= zd) exit
-        end do
-        w = (zd - z_c(k))/(z_c(k+1) - z_c(k))
-        c_ref = (1.0_dp - w)*cs0(k) + w*cs0(k+1)
+        if (zd >= z_c(1) .and. zd <= z_c(n_r)) then
+          ! (inside the domain: its own c_s0, as before)
+          do k = 1, n_r - 1
+            if (z_c(k+1) >= zd) exit
+          end do
+          w = (zd - z_c(k))/(z_c(k+1) - z_c(k))
+          c_ref = (1.0_dp - w)*cs0(k) + w*cs0(k+1)
+        else
+          ! (above a deep top, the cascade: from the whole profile's CZ, the
+          ! same anchor at every level)
+          if (zd < z_cz(1) .or. zd > z_cz(k_join)) stop 'set_rsst: rsst_depth_km outside the CZ'
+          do k = 1, k_join - 1
+            if (z_cz(k+1) >= zd) exit
+          end do
+          w = (zd - z_cz(k))/(z_cz(k+1) - z_cz(k))
+          c_ref = (1.0_dp - w)*cs_cz(k) + w*cs_cz(k+1)
+        end if
         c_scale = c_ref
       end if
     end if

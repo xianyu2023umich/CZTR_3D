@@ -52,6 +52,9 @@ contains
     glm_cfl = glm_ch == 'cfl'
     grey_i0_g = 1                                 ! first cell of the implicit grey solve (whole column)
     if (grey_top_km > 0.0_dp) then
+      ! (a deep top, the cascade: no cell within grey_top_km of the photosphere;
+      ! explicit radiative diffusion in the whole column)
+      grey_i0_g = n_r + 1
       do i = 1, n_r
         if (-z_c(i) < grey_top_km*1.0e5_dp) then
           grey_i0_g = i
@@ -1226,6 +1229,9 @@ contains
     end do
     if (m == 0) call arbor_abort('cz3d: import: no state_export files in '//trim(import_dir))
     if (any(imp_nb(2:3) /= nb(2:3))) call arbor_abort('cz3d: import: the horizontal block size differs')
+    ! the export's top (cells): a taller run (the cascade) starts its blocks
+    ! above it from the init file (import_block)
+    imp_top = maxval(key_K(KI+1, 1:m) + 1)*imp_nb(1)
     if (mod(imp_nb(1), nb(1)) /= 0) call arbor_abort('cz3d: import: the radial block size must divide the exported one')
     call move_alloc(key_K, imp_key)
     call move_alloc(file_K, imp_file)
@@ -1280,6 +1286,9 @@ contains
     call import_open()
     m = import_record(Key_IB(:, iBlock), .true.)
     if (m == 0 .and. use_atmosphere .and. Key_IB(KI+1, iBlock)*nb(1) >= k_join) return
+    ! the cascade: a block above the export's top keeps the init file's state
+    ! (B = 0 with no seed: with a conductor top below, B_r ~ 0 at the old top)
+    if (m == 0 .and. Key_IB(KI+1, iBlock)*nb(1) >= imp_top) return
     if (m == 0) call arbor_abort('cz3d: import: no exported block at this place (a different grid?)')
     allocate(buf(imp_nb(1), imp_nb(2), imp_nb(3), imp_nv))
     write(name, '(A,A,I4.4,A)') trim(import_dir), '/state_export_r', imp_file(m), '.bin'
