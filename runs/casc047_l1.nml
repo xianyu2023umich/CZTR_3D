@@ -3,9 +3,10 @@
 ! (140, 168, 196 cells) by import into taller runs: the blocks above the
 ! export's top start from the init file with B = 0 (the conductor top keeps
 ! B_r ~ 0 there; laptop test at 1.875 deg: div B continuous through it).
-! - Start: the 0.47 deg CZ export of mhd047_czdt (mhd5's field and flow,
-!   1.0 R) trimmed to 112 cells (a div B transient at the cut, cleaned by GLM
-!   in ~20 steps in the 1.875 test).
+! - Start: from nothing (the user, 2026-11-23): the init profile at rest with
+!   random s1 (ds1_random 1) and a weak toroidal seed, B_phi = 100 G sin(theta)
+!   below 0.92 R, none above 0.95 R (divergence free; the top at 0.954 R
+!   field free). Convective onset ~1 month (the box: 25-35 days at 64^2).
 ! - Top: face wall, a cooling layer one H_p wide removing L (the box
 !   cascade's), no MLT (levels 1-3), radiation explicit (deep top), conductor
 !   for B (odd B_r, even B_h). Bottom: conductor.
@@ -15,7 +16,7 @@
 ! - B diffusion: resistive, eta = |v| dr/2 (b_eta_dr 1; needs si_radial).
 !   va_max 10 km/s (mhd5's): if the deep v_A reaches it, it sets dt.
 ! - Rotation: solar, omega_rot 2.6e-6 (414 nHz), the full Coriolis term (split).
-! Expected dt ~200 s (1.875 test: 224 s); ~1.6e5 steps per model year; cost
+! Expected dt ~200 s (1.875 tests: 224-230 s); ~1.6e5 steps per model year; cost
 ! ~0.15 SU per model day (~55 SU per year) at 1.75 us/cell-step on SPR.
 ! 1152 columns at 0.47 deg (si_radial: whole columns per rank): 2 nodes x 96
 ! ranks give 6 each; ~10 h per model year if the estimate holds.
@@ -26,21 +27,20 @@
 &cz3d
   grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 112
   table_file = 'data/eos_table_wind.bin'
-  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/mhd047_czdt'
   out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1'
   wall_top = 'face'
   top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
   use_convection = .false.
   rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
   diffusion_heating = .true.
-  ds1_random = 0.0
+  ds1_random = 1.0
   yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
   use_atmosphere = .false.
-  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor', va_max = 1.0e6
+  use_B = .true., b_seed = 'toroidal', b_seed_G = 100.0, b_seed_r1_rsun = 0.92, b_seed_r2_rsun = 0.95, b_bc_bottom = 'conductor', b_bc_top = 'conductor', va_max = 1.0e6
   si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
   omega_rot = 2.6e-6
   dt1 = 0.0, mr_levels = 0
-  t_end = 3.72e7, n_step_max = 100000000, dt_max = 1.0e4
+  t_end = 3.156e7, n_step_max = 100000000, dt_max = 1.0e4
   n_log = 100, dt_prof = 0.0, prof_every = 432, plot_dt = 0.0, restart_dt = 1728000.0
   dump_shells = 60, 100, 108, 112
   wall_time_margin = 1800.0
