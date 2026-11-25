@@ -14,7 +14,7 @@
 !   through the cascade): c_red 1.8 km/s at the bottom, 3.1 km/s at this top;
 !   reduced Mach ~0.06-0.09 expected (from the 0.47 deg profile).
 ! - B diffusion: resistive, eta = |v| dr/2 (b_eta_dr 1; needs si_radial).
-!   va_max 10 km/s (mhd5's): if the deep v_A reaches it, it sets dt.
+!   No Alfven cap (va_max removed 2026-11-25; it was inert at L1/L2, cap_frac 0).
 ! - Rotation: solar, omega_rot 2.6e-6 (414 nHz), the full Coriolis term (split);
 !   the global L_z correction every 20 steps (notes/rotation.md: the scheme's
 !   torque ~-2.8 nHz/yr of mean rotation without it, ~1e-4 nHz with it).
@@ -40,7 +40,7 @@
   ds1_random = 1.0
   yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
   use_atmosphere = .false.
-  use_B = .true., b_seed = 'toroidal', b_seed_G = 100.0, b_seed_r1_rsun = 0.92, b_seed_r2_rsun = 0.95, b_bc_bottom = 'conductor', b_bc_top = 'conductor', va_max = 1.0e6
+  use_B = .true., b_seed = 'toroidal', b_seed_G = 100.0, b_seed_r1_rsun = 0.92, b_seed_r2_rsun = 0.95, b_bc_bottom = 'conductor', b_bc_top = 'conductor'
   si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
   omega_rot = 2.6e-6, lz_correct_steps = 20
   dt1 = 0.0, mr_levels = 0

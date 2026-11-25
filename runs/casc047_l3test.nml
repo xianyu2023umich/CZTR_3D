@@ -11,6 +11,9 @@
 !   km, 7.7 km/s); expect ~4 s once the flows and v_A grow (L2: 29 -> 17 s).
 !   ~5e-4 SU per step (L1's per cell x 168/112): ~11 SU and ~0.9 h per day on
 !   6 nodes: 2 days ~22 SU, ~2 h.
+! - RAN WITH va_max = 1.0e6 (10 km/s; removed from this file 2026-11-25): the
+!   cap acted at the top and the run hit NaN at day 11.48. Reruns without it:
+!   casc047_l3nocap, casc047_l3beq.
 ! - Needs casc047_l2test's state_export_r*.bin (written at its end).
 !   sbatch -N 6 --ntasks-per-node 96 -t 03:30:00 tools/job.stampede3_seq runs/casc047_l3test.nml
 &cz3d
@@ -26,7 +29,7 @@
   ds1_random = 1.0
   yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
   use_atmosphere = .false.
-  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor', va_max = 1.0e6
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
   si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
   omega_rot = 2.6e-6, lz_correct_steps = 20
   dt1 = 0.0, mr_levels = 0

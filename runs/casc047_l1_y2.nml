@@ -22,7 +22,7 @@
   ds1_random = 1.0
   yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
   use_atmosphere = .false.
-  use_B = .true., b_seed = 'toroidal', b_seed_G = 100.0, b_seed_r1_rsun = 0.92, b_seed_r2_rsun = 0.95, b_bc_bottom = 'conductor', b_bc_top = 'conductor', va_max = 1.0e6
+  use_B = .true., b_seed = 'toroidal', b_seed_G = 100.0, b_seed_r1_rsun = 0.92, b_seed_r2_rsun = 0.95, b_bc_bottom = 'conductor', b_bc_top = 'conductor'
   si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
   omega_rot = 2.6e-6, lz_correct_steps = 20
   dt1 = 0.0, mr_levels = 0

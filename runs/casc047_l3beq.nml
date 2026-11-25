@@ -1,0 +1,44 @@
+! Radial cascade at 0.47 deg, level 3 TEST without the cap, with the decaying
+! top (2026-11-25): 168 cells (top at 0.998 R, -1.5 Mm), conductor top with
+! b_top_beq (ghost B_h decaying as sqrt(rho0), as casc047_l2beq: there the top
+! B_h fell 1.42 -> 0.87-0.95 kG, B/B_eq 0.37 -> 0.22, the dynamo barely felt it).
+! The production candidate for L3.
+! - Import from casc047_l2test's export (t = 1 yr + 10 d) as casc047_l3test:
+!   cells 1-140 (all variables) from the export, 141-168 from the init file at
+!   rest with B = 0; b_seed 'none'. 2 days (to t = 1 yr + 12 d).
+! - NO Alfven cap (va_max = 0, the default). casc047_l3test had va_max 10 km/s
+!   from mhd5: the cap acted in up to 8e-4 of the cells (peak v_A 31-36 km/s,
+!   f ~0.1, 15-20 kG top tubes, rho1/rho0 -0.4) and the run hit NaN at day
+!   11.48 in the top cell (lat -35, lon -171). Its dt (2.55 s) was set by the
+!   capped v_A (~10 km/s) in the top two cells, where the radial Alfven speed
+!   stays in the CFL (outside the semi-implicit range).
+! - dt: uncapped v_A enters the CFL at the top. If the tubes again reach v_A
+!   ~35 km/s, dt ~1 s (cfl 0.5, dr 92 km); if the full Lorentz force stops them
+!   near v_A ~ c_s, dt ~2 s. l3test cost ~8.8 SU per model day at 2.55 s, so
+!   2 days ~18-45 SU, ~2-5 h. The job's time limit stops the run cleanly with a
+!   restart (wall_time_max from the job script); restart every day.
+! - Needs casc047_l2test's state_export_r*.bin (written at its end).
+!   sbatch -N 6 --ntasks-per-node 96 -t 05:00:00 tools/job.stampede3_seq runs/casc047_l3beq.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2test'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 168
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l3beq'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .false.
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor', b_top_beq = .true.
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 3.25968e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 300, plot_dt = 0.0, restart_dt = 86400.0
+  dump_shells = 112, 140, 141, 154, 162, 168
+  wall_time_margin = 1800.0
+  export_state = .true.
+/
