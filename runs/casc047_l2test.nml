@@ -1,0 +1,47 @@
+! Radial cascade at 0.47 deg, level 2 TEST (2026-11-25): the first insertion,
+! 140 cells (top at 0.991 R, -6.4 Mm), imported from casc047_l1's year-1
+! export (t = 1 yr). A short run (~10-20 SU) to see that L2 works: the new
+! layer's start, dt, div B, the flux through the old top, the field spreading
+! up. Same physics as casc047_l1 otherwise.
+! - Import: cells 1-112 (all variables: rho1, v, s1, B, psi) from the export;
+!   cells 113-140 from the init file (at rest, the 1D s1 plus ds1_random) with
+!   B = 0. The L1 conductor top kept B_r ~ 0 at the old top face (rms B_r
+!   ~30 G in cell 112), so div B is continuous there; B_h (~1.2 kG rms in cell
+!   112) jumps to 0 at that face: a current sheet that the flow and eta spread
+!   up into the new layer (beta ~1e7 there: no dynamical effect).
+! - b_seed = 'none': with 'toroidal' the seed would be ADDED to the imported
+!   field (cz_init_block applies the seed after import_block).
+! - The cooling layer and the conductor move to the new top; the old top's
+!   face wall and cooling are gone.
+! - Cost (1.875 deg test: dt 29 s, radial wave at cell 140, dr 323 km, c_red
+!   5.4 km/s; L1 per step x 140/112): ~3200 steps and ~1.3 SU per model day,
+!   ~400 s wall per day on 6 nodes: 10 days ~13 SU, ~1.1 h.
+! - The export: the year-2 job (same out_dir) overwrites state_export_r*.bin
+!   at its end, so copy year 1's aside first:
+!     mkdir /scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1/export_y1
+!     cp /scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1/state_export_* \
+!        /scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1/export_y1/
+!   sbatch -N 6 --ntasks-per-node 96 -t 02:30:00 tools/job.stampede3_seq runs/casc047_l2test.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1/export_y1'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 140
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2test'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .false.
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor', va_max = 1.0e6
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 3.2424e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 400, plot_dt = 0.0, restart_dt = 432000.0
+  dump_shells = 100, 112, 113, 126, 140
+  wall_time_margin = 1800.0
+  export_state = .true.
+/
