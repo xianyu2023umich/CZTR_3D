@@ -1,0 +1,34 @@
+! casc047_l1, second model year (2026-11-25): the continuation of
+! runs/casc047_l1.nml from its final restart (t = 1 yr, step 224943), same
+! settings and out_dir (log.txt and the profile/rotation series continue;
+! the seed is not re-applied: the restart holds B). After year 1, E_mag/E_kin
+! 1.27e-2, B_rms/B_eq ~0.1-0.14 at all depths and still growing (e-fold of
+! E_mag ~9 months); the flow, flux and rotation steady since ~day 100.
+! Year 1: 6.2 h on 6 nodes (75 SU); dt 133-140 s at the end, so ~6.5-7 h.
+! runs/casc047_l1.nml's run_status.txt says 'finished', so job.stampede3_spr4
+! would exit at once: submit with the plain job script
+!   sbatch -N 6 --ntasks-per-node 96 -t 12:00:00 tools/job.stampede3_seq runs/casc047_l1_y2.nml
+! (wall stop with a restart if needed; run_status.txt then names it).
+&cz3d
+  restart_from = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1/restart_00224943.rst'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 112
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .false.
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'toroidal', b_seed_G = 100.0, b_seed_r1_rsun = 0.92, b_seed_r2_rsun = 0.95, b_bc_bottom = 'conductor', b_bc_top = 'conductor', va_max = 1.0e6
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 6.312e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 432, plot_dt = 0.0, restart_dt = 1728000.0
+  dump_shells = 60, 100, 108, 112
+  wall_time_margin = 1800.0
+  export_state = .true.
+/
