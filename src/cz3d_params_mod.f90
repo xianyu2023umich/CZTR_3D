@@ -359,6 +359,15 @@ module cz3d_params_mod
   ! mirrored: the field vertical at the wall); Hotta et al. 2014: conductor at
   ! the bottom, vertical at the top
   character(len=12) :: b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  ! b_top_beq (with b_bc_top = 'conductor', wall_top = 'face'): the top's
+  ! ghost B_theta, B_phi = the mirrored value times sqrt(rho0_ghost/rho0_src),
+  ! the ratio of B_eq = v sqrt(4 pi rho) with the ghost's mirrored v (and
+  ! relative rho1): a field that keeps B/B_eq as it continues into the
+  ! convection above a cascade level's top. The resistive radial flux then
+  ! carries B_h out through the top (B_r stays odd: no net flux through it)
+  ! instead of piling up under the wall. For the cascade tops inside the CZ,
+  ! not a photospheric top (no convection above it).
+  logical :: b_top_beq = .false.
   ! Alfven-speed cap (after Rempel 2009/2017) [cm/s]: the Lorentz force times
   ! f = 1/sqrt(1 + (v_A/va_max)^4), so the waves' speed sqrt(f) v_A stays
   ! below ~va_max; that speed (not v_A) enters the time step, the diffusion's
@@ -722,7 +731,7 @@ module cz3d_params_mod
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
-      use_minmod, diffusion_h, diff_top_km, diffusion_heating, wall_bottom, wall_top, ds1_random, c_target, rsst_q, rsst_form, yy_margin, refine_h, patch_level, patch_lat_deg, patch_lon_deg, patch_radius_deg, probe_lat_deg, probe_lon_deg, probe_radius_deg, probe_cells, g_from_background, restart_dt, dt_budget, restart_from, restart_domain_tol, restart_new_output, wall_time_max, wall_time_margin, wall_check_steps, r_top_rsun, top_energy, cool_width_km, cool_width_hp, dt1, prof_every, dt1_ramp_steps, dt1_hold_steps, grey_top_km, rsst_depth_km, dump_shells, omega_rot, coriolis, lz_correct_steps, lz_correct_dt, use_B, alpha_glm, glm_ch, glm_cfl_frac, b_diff_factor, va_max, b_bc_bottom, b_bc_top, b_seed, b_seed_G, b_seed_r1_rsun, b_seed_r2_rsun, export_state, import_dir, plot_blocks
+      use_minmod, diffusion_h, diff_top_km, diffusion_heating, wall_bottom, wall_top, ds1_random, c_target, rsst_q, rsst_form, yy_margin, refine_h, patch_level, patch_lat_deg, patch_lon_deg, patch_radius_deg, probe_lat_deg, probe_lon_deg, probe_radius_deg, probe_cells, g_from_background, restart_dt, dt_budget, restart_from, restart_domain_tol, restart_new_output, wall_time_max, wall_time_margin, wall_check_steps, r_top_rsun, top_energy, cool_width_km, cool_width_hp, dt1, prof_every, dt1_ramp_steps, dt1_hold_steps, grey_top_km, rsst_depth_km, dump_shells, omega_rot, coriolis, lz_correct_steps, lz_correct_dt, use_B, alpha_glm, glm_ch, glm_cfl_frac, b_diff_factor, va_max, b_bc_bottom, b_bc_top, b_top_beq, b_seed, b_seed_G, b_seed_r1_rsun, b_seed_r2_rsun, export_state, import_dir, plot_blocks
 
 contains
 
@@ -744,6 +753,8 @@ contains
     if (use_B .and. rsst_form /= 'hotta2012') call arbor_abort('use_B needs rsst_form = hotta2012')
     if (b_bc_bottom /= 'conductor' .and. b_bc_bottom /= 'radial') call arbor_abort('b_bc_bottom must be conductor or radial')
     if (b_bc_top /= 'conductor' .and. b_bc_top /= 'radial') call arbor_abort('b_bc_top must be conductor or radial')
+    if (b_top_beq .and. .not. (use_B .and. b_bc_top == 'conductor' .and. wall_top == 'face')) &
+        call arbor_abort("b_top_beq needs use_B, b_bc_top = 'conductor' and wall_top = 'face'")
     if (wall_time_max > 0.0_dp .and. wall_time_margin >= wall_time_max) call arbor_abort('wall_time_margin must be below wall_time_max')
     if (wall_check_steps < 1) call arbor_abort('wall_check_steps must be >= 1')
     if (coriolis /= 'split' .and. coriolis /= 'rk') call arbor_abort('coriolis must be split or rk')

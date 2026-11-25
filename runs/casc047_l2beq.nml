@@ -1,0 +1,37 @@
+! casc047_l2test continued with b_top_beq (2026-11-25): the conductor top's
+! ghost B_h decays as sqrt(rho0) (B/B_eq kept into the convection above), so
+! the resistive radial flux drains B_h through the top instead of piling it
+! up under the wall. From the L2 test's final restart (t = 1 yr + 10 d: top
+! rms B_h 1.4 kG, B/B_eq 0.37, still growing with a ~13 d e-fold) for 6 days.
+! At this top f = 0.93 (ghost 1), 0.81 (ghost 2); drain of the top cell ~4 h,
+! of the ~2 H_p layer ~1.5 d (eta = |v| dr/2, |v| ~700 m/s): a new balance
+! within the run. Compare with casc047_l2test days 4-10 (same settings,
+! conductor without the decay) and with casc047_l3test.
+! - 1.875 deg tests: the decay drains the top (815 -> 591 G in 100 steps with
+!   a large test eta), div B unchanged; a restart into a new out_dir works.
+! - Cost: dt ~17 s at the start (more if the top field weakens): ~1.9 SU per
+!   day, 6 days ~12 SU, ~1 h on 6 nodes.
+!   sbatch -N 6 --ntasks-per-node 96 -t 02:00:00 tools/job.stampede3_seq runs/casc047_l2beq.nml
+&cz3d
+  restart_from = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2test/restart_00268414.rst'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 140
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2beq'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .false.
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor', va_max = 1.0e6
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0, b_top_beq = .true.
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 3.29424e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 400, plot_dt = 0.0, restart_dt = 259200.0
+  dump_shells = 100, 112, 113, 126, 140
+  wall_time_margin = 1800.0
+  export_state = .true.
+/

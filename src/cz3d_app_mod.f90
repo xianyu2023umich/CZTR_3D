@@ -509,8 +509,19 @@ contains
       ! background changes steeply across the wall; mirroring rho1 itself
       ! gives negative ghost densities above an evacuated top cell)
       if (v == rho1_ .and. iDir == 1 .and. allocated(rho0_w)) call relative_rho1(Key_IB(KI+1, iBlock)*nb(1))
+      ! b_top_beq: the top's ghost B_h decays as B_eq ~ sqrt(rho) (the face wall's mirror: ghost m+g from cell m+1-g)
+      if (b_top_beq .and. iDir == 1 .and. iSide == 2 .and. (v == bt_ .or. v == bp_) .and. allocated(rho0_w)) &
+          call beq_decay(Key_IB(KI+1, iBlock)*nb(1), v)
     end do
   contains
+    subroutine beq_decay(off, v)
+      integer, intent(in) :: off, v
+      integer :: g, m
+      m = nb(1)
+      do g = 1, nGhost
+        A(m+g, :, :, v, iBlock) = A(m+g, :, :, v, iBlock)*sqrt(rho0_w(off+m+g)/rho0_w(off+m+1-g))
+      end do
+    end subroutine beq_decay
     ! wall_top = 'outflow': rho ~ r^-2, v_r >= 0 copied, v_h and s copied;
     ! B_r ~ r^-2, B_h and psi copied
     subroutine outflow_top(off)
@@ -1002,7 +1013,12 @@ contains
               d(n) = vol*d(n)
             end do
             d(1) = d(1) - a(1)*xg(1);  a(1) = 0.0_dp
-            d(m) = d(m) - cc(m)*xg(2);  cc(m) = 0.0_dp
+            if (b_top_beq) then                            ! (the ghost = f x_m, implicit)
+              b(m) = b(m) + cc(m)*sqrt(rho0_w(m+1)/rho0_w(m))
+            else
+              d(m) = d(m) - cc(m)*xg(2)
+            end if
+            cc(m) = 0.0_dp
             do n = 2, m
               w = a(n)/b(n-1)
               b(n) = b(n) - w*cc(n-1)
