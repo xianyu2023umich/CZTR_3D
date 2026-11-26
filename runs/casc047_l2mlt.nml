@@ -1,0 +1,52 @@
+! Radial cascade at 0.47 deg, level 2 with the wall closure (2026-11-25): 140
+! cells (top at 0.991 R, -6.4 Mm), imported from casc047_l1's year-1 export
+! (t = 1 yr), as casc047_l2test and casc047_l2beq: the same initial state, so
+! the three L2 runs differ only in the top's treatment (plain conductor;
+! ghost B_h decaying as sqrt(rho0); this: MLT + closure).
+! - The convection the wall stops (v_r -> 0 over ~1-2 H_p, the pile-up
+!   layer) is the unresolved convection, as MLT's: MLT on with the
+!   resolution switch (mlt_R0 = 1, as mhd5: f > 0.5 above ~-15 Mm at 0.47
+!   deg, where H_p < dx) and the wall term (mlt_wall_hp = 1: f = max(f_res,
+!   1/(1 + (d/H_top)^4)), d the depth below the top face; mainly matters at
+!   L1, where f_res(top) ~0.06). The MLT flux is 0 through the wall face; the
+!   cooling layer still removes L.
+! - The closure follows f v_MLT (v from the column's MLT flux): eta_t = f v
+!   ell/3 (added to eta = |v| dr/2), nu_t the same on v, downward pumping
+!   gamma_r = -f v in the induction (c = 1 each: ~0.2 km/s at this top). No
+!   quenching (the strong field is what it has to act on). out_dir/turb_NNNN.dat:
+!   the horizontal means with the profiles.
+! - Import, seed, walls as casc047_l2test (cells 113-140 from the init file at
+!   rest with B = 0; b_seed 'none'); no b_top_beq, no Alfven cap.
+! - Expect a start-up transient where the imported state is strongly
+!   superadiabatic for MLT (the old L1 top's cooled layer at cell 112; the
+!   1.875 deg test: max L_total 12 -> 1.7 in 200 steps, stable, dt unchanged).
+! - Compare with l2test/l2beq: the top pile-up (B_h top / 1 H_p below), max
+!   |B| in the top ~15 Mm (the 15-20 kG downflow tubes that crashed L3), B/B_eq,
+!   the L budget, dt, the deep E_mag and rotation (if the closure changes the
+!   deep part, L1 would need redoing with it).
+! - Cost as casc047_l2test: dt ~17 s, 10 days ~20 SU, ~1.6 h on 6 nodes.
+!   sbatch -N 6 --ntasks-per-node 96 -t 02:30:00 tools/job.stampede3_seq runs/casc047_l2mlt.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1/export_y1'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 140
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2mlt'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0, mlt_wall_hp = 1.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_c_gamma = 1.0
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 3.2424e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 400, plot_dt = 0.0, restart_dt = 432000.0
+  dump_shells = 100, 112, 113, 126, 132, 140
+  wall_time_margin = 1800.0
+  export_state = .true.
+/
