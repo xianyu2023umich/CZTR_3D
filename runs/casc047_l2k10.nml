@@ -1,0 +1,44 @@
+! Radial cascade at 0.47 deg, level 2, pumping k = 1 (2026-11-26):
+! casc047_l2k05 with turb_gamma_k = 1 instead of 1/2, all else the same (same
+! import: casc047_l1's year-1 export, 140 cells, top at -6.4 Mm).
+! - l2k05 at day 5.6: the top's field stays below l2test (B/B_eq 0.12 vs 0.25)
+!   but is ~2x the k = 1/2 balance: B/sqrt(rho) rises 2.35x from -20 Mm to the
+!   top (B ~ rho^0.17, not rho^0.5) and still grows (0.10 at day 5, 0.117 at
+!   5.6). The likely source is the resolved flow at the wall (v_r -> 0, v_h
+!   480 m/s: upflows spread against the wall and stretch field horizontally),
+!   which the mean-field balance does not contain; the pumping there is ~20
+!   m/s vs resolved rms v_r 40-70 m/s 2-4 Mm below.
+! - k = 1 (B ~ rho balance) doubles the pumping: ~40-48 m/s at the top
+!   (c_gamma = 1, ~k 3.6, emptied the top). Run beside l2k05's continuation
+!   to day 10, to see whether k = 1/2 saturates and how the top depends on k.
+! - Compare at the same days: B/B_eq and B/sqrt(rho) in the top 20 Mm (the
+!   balance: flat B/sqrt(rho^k)), max |B| in the top 10 Mm, dt, the L budget.
+!   python: scratchpad beqfig.py-style profiles, figs/8_B_over_Beq_profiles.png
+! - Cost: as l2k05 (~4 days per 2 h job on 8 skx nodes, ~6 on 12). t_end is
+!   day 10: a second job continues it with tools/job.stampede3.
+!   bash tools/submit_dev.sh runs/casc047_l2k10.nml
+!   then: bash tools/submit_dev.sh -j tools/job.stampede3 runs/casc047_l2k10.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1/export_y1'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 140
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2k10'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0, mlt_wall_hp = 1.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_gamma_form = 'density', turb_gamma_k = 1.0
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 3.2424e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 400, plot_dt = 0.0, restart_dt = 86400.0
+  dump_shells = 100, 112, 113, 126, 132, 140
+  wall_time_margin = 600.0
+  export_state = .true.
+/
