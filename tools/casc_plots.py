@@ -75,9 +75,11 @@ def fig_profiles(run, out, avg):
     a2 = ax[1].twinx(); a2.plot(z, B / Beq, 'r:', label='B/B_eq'); a2.set_ylabel('B_rms / B_eq', color='r')
     a2.set_ylim(0, max(0.3, 1.2 * (B / Beq).max()))
     ax[1].set_ylabel('[G]'); ax[1].legend(loc='lower left'); ax[1].set_title('field')
-    for c, lab in [(10, 'L_rad'), (12, 'L_enth+L_kin'), (13, 'L_kin'), (14, 'L_diff'), (15, 'L_cool')]:
-        ax[2].plot(z, m[:, c], label=lab)
-    ax[2].plot(z, m[:, 10] + m[:, 12] + m[:, 14] + m[:, 15], 'k', label='sum')
+    for c, lab in [(10, 'L_rad'), (11, 'L_conv (MLT)'), (12, 'L_enth+L_kin'), (13, 'L_kin'), (14, 'L_diff'),
+                   (15, 'L_cool')]:
+        if c != 11 or np.abs(m[:, 11]).max() > 1e-3:     # (L_conv only when MLT carries flux)
+            ax[2].plot(z, m[:, c], label=lab)
+    ax[2].plot(z, m[:, 10] + m[:, 11] + m[:, 12] + m[:, 14] + m[:, 15], 'k', label='sum')
     ax[2].set_ylabel('L / Lsun'); ax[2].legend(); ax[2].set_title('luminosity budget')
     for x in ax:
         x.set_xlabel('z [Mm]')
