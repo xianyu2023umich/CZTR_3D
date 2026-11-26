@@ -47,6 +47,6 @@
   t_end = 3.25968e7, n_step_max = 100000000, dt_max = 1.0e4
   n_log = 100, dt_prof = 0.0, prof_every = 300, plot_dt = 0.0, restart_dt = 86400.0
   dump_shells = 112, 140, 141, 154, 162, 168
-  wall_time_margin = 1800.0
+  wall_time_margin = 600.0
   export_state = .true.
 /

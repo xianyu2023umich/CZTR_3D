@@ -8,7 +8,8 @@
 #   bash tools/submit_dev.sh -N 12 -t 01:30:00 runs/a.nml
 #
 # Options:
-#   -N n       nodes (default: all idle skx-dev nodes, at most 16)
+#   -N n       nodes (default: the largest of 12, 8, 6, 4, 3, 2, 1 that is idle;
+#              see the column note below)
 #   -t time    wall time hh:mm:ss (default and max 02:00:00)
 #   -j script  job script (default tools/job.stampede3_seq: the namelists run
 #              one after another; tools/job.stampede3 continues a run from its
@@ -18,9 +19,15 @@
 #
 # skx-dev (TACC docs, Nov 2026; check with qlimits): SKX nodes, 48 cores and
 # 192 GB each, at most 16 nodes and 2 h per job, 2 running jobs and 4 submitted
-# per user, 1 SU per node-hour. Per core SKX is ~1.35x slower than SPR, so 16
-# skx nodes (768 ranks) run about as fast as 6 spr nodes x 96 ranks (576) at
-# 16 instead of 12 SU per hour: worth it when spr has a queue.
+# per user, 1 SU per node-hour. Per core SKX is ~1.35x slower than SPR.
+#
+# Columns: with si_radial each rank owns whole radial columns, and the 0.47 deg
+# Yin-Yang grid has 1152 (2 x 24 x 24). The rank with the most columns sets the
+# pace, so 48 x nodes should divide 1152: 1, 2, 3, 4, 6, 8 or 12 nodes. 16
+# nodes (768 ranks: 1 or 2 columns each) is no faster than 12 (576 ranks: 2
+# each, as the 6 spr x 96 jobs) and costs 4/3 as much. 12 skx nodes run ~1.35x
+# slower than 6 spr x 96 at the same 12 SU per hour: worth it when spr has a
+# queue.
 #
 # The job's time limit reaches cz3d (CZ3D_WALL_TIME_MAX), so a run that needs
 # more than 2 h stops cleanly with a restart, wall_time_margin (namelist)
@@ -79,14 +86,22 @@ esac
 secs=$(echo "$time_lim" | awk -F: '{s = 0; for (i = 1; i <= NF; i++) s = 60*s + $i; print s}')
 if [ "$secs" -gt 7200 ]; then echo "submit_dev: -t $time_lim is over skx-dev's 2 h"; exit 1; fi
 
-# nodes: all idle ones (at most 16) unless -N was given
+# nodes: the largest count that divides the 1152 columns evenly and is idle,
+# unless -N was given
 if [ -z "$nodes" ]; then
-  nodes=$idle; [ "$nodes" -gt 16 ] && nodes=16
+  nodes=0
+  for n in 12 8 6 4 3 2 1; do
+    if [ "$n" -le "$idle" ]; then nodes=$n; break; fi
+  done
   if [ "$nodes" -lt 1 ]; then
     [ $force -eq 1 ] || { echo "submit_dev: no idle skx-dev node (use -N n -f to queue anyway)"; exit 1; }
-    nodes=16
+    nodes=12
   fi
 fi
+case " 1 2 3 4 6 8 12 " in
+  *" $nodes "*) ;;
+  *) echo "submit_dev: warning: $((nodes*48)) ranks do not divide the 1152 columns of the 0.47 deg grid evenly" ;;
+esac
 if [ "$nodes" -gt 16 ]; then echo "submit_dev: -N $nodes is over skx-dev's 16"; exit 1; fi
 if [ "$nodes" -gt "$idle" ] && [ $force -eq 0 ]; then
   echo "submit_dev: $nodes nodes asked, $idle idle: the job would wait (use -f to queue anyway)"; exit 1
