@@ -1,0 +1,47 @@
+! Radial cascade at 0.47 deg, level 3 TEST with the mirrored field start
+! (2026-11-25): 168 cells (top at 0.998 R, -1.5 Mm), plain conductor top, no
+! cap: casc047_l3nocap plus import_mirror_b, the same import (casc047_l2test's
+! export, t = 1 yr + 10 d), 2 days.
+! - Why: l3test and l3nocap both hit NaN (days 11.48, 11.33) in the top cell
+!   over the same 15 kG bundle (about (-34, -170)), present in the L2 state.
+!   Under the L2 conductor the ghosts mirrored B_h, so the magnetic pressure
+!   was continuous at the wall and the wall held the tube down. The L3
+!   insertion started the new cells with B = 0: B^2/8 pi (~9e6 dyn/cm2 at 15
+!   kG, ~1% of p) released over one face at once (~sqrt(dp/rho) ~2 km/s).
+! - import_mirror_b: the new layer (cells 141-168) starts with what the old
+!   ghosts held, continued: at height h above the old top face the field at
+!   depth h below it (B_r odd, B_h even), times sqrt(p0(new)/p0(source)) (beta
+!   kept: a 15 kG bundle at beta ~120 at -6.4 Mm continues to ~0.9 kG at the
+!   new top); the gas keeps the init rho with s lowered so that p_gas +
+!   B^2/8 pi = the init pressure (neutrally buoyant, magnetostatic). 1.875 deg
+!   tests: continuous B_h across the old face, the new layer at rest (rms v_r
+!   as without the mirror), div B unchanged.
+! - Compare with l3nocap: the field's arrival at the new top (B_h, B/B_eq),
+!   max v_A, min rho1/rho0, the Mach jump; survival past day 11.5.
+! - Cost as l3nocap (dt ~1.2 s, ~14 SU per model day): 2 days ~30 SU, ~5 h.
+!   The job's time limit stops the run cleanly with a restart (daily).
+! - Needs casc047_l2test's state_export_r*.bin; rebuild (new code).
+!   sbatch -N 6 --ntasks-per-node 96 -t 05:30:00 tools/job.stampede3_seq runs/casc047_l3mir.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2test', import_mirror_b = .true.
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 168
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l3mir'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .false.
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 3.25968e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 300, plot_dt = 0.0, restart_dt = 86400.0
+  dump_shells = 112, 140, 141, 154, 162, 168
+  wall_time_margin = 1800.0
+  export_state = .true.
+/

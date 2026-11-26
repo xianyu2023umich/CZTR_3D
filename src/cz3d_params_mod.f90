@@ -495,6 +495,16 @@ module cz3d_params_mod
   ! as a Tecplot ASCII file (ARBOR's arbor_plot_blocks: leaf, patch, levels, rank)
   logical :: plot_blocks = .false.
   character(len=256) :: import_dir = ''
+  ! import_mirror_b (the cascade, use_B): the new cells above the export's
+  ! top (imp_top) start with the field the old top's conductor ghosts held,
+  ! continued over the whole new layer: at height h above the old top face
+  ! the field at depth h below it (B_r odd, B_h even), times sqrt(p0(new)/
+  ! p0(source)) (beta kept). The magnetic pressure stays continuous at the old
+  ! face (no impulse when the wall goes) and a concentration continues upward
+  ! expanded instead of ending in a field-free layer. The gas keeps the init
+  ! state's rho with s lowered so that p_gas + B^2/8 pi = the init pressure
+  ! (cooler, neutrally buoyant: magnetostatic); v = 0, psi = 0
+  logical :: import_mirror_b = .false.
 
   ! --- numerical diffusion (Rempel form, as CZTR) ---
   logical  :: use_diffusion = .true.
@@ -738,7 +748,7 @@ module cz3d_params_mod
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
       use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, mlt_wall_hp, use_diffusion, &
-      use_minmod, diffusion_h, diff_top_km, diffusion_heating, wall_bottom, wall_top, ds1_random, c_target, rsst_q, rsst_form, yy_margin, refine_h, patch_level, patch_lat_deg, patch_lon_deg, patch_radius_deg, probe_lat_deg, probe_lon_deg, probe_radius_deg, probe_cells, g_from_background, restart_dt, dt_budget, restart_from, restart_domain_tol, restart_new_output, wall_time_max, wall_time_margin, wall_check_steps, r_top_rsun, top_energy, cool_width_km, cool_width_hp, dt1, prof_every, dt1_ramp_steps, dt1_hold_steps, grey_top_km, rsst_depth_km, dump_shells, omega_rot, coriolis, lz_correct_steps, lz_correct_dt, use_B, alpha_glm, glm_ch, glm_cfl_frac, b_diff_factor, va_max, b_bc_bottom, b_bc_top, b_top_beq, b_seed, b_seed_G, b_seed_r1_rsun, b_seed_r2_rsun, export_state, import_dir, plot_blocks
+      use_minmod, diffusion_h, diff_top_km, diffusion_heating, wall_bottom, wall_top, ds1_random, c_target, rsst_q, rsst_form, yy_margin, refine_h, patch_level, patch_lat_deg, patch_lon_deg, patch_radius_deg, probe_lat_deg, probe_lon_deg, probe_radius_deg, probe_cells, g_from_background, restart_dt, dt_budget, restart_from, restart_domain_tol, restart_new_output, wall_time_max, wall_time_margin, wall_check_steps, r_top_rsun, top_energy, cool_width_km, cool_width_hp, dt1, prof_every, dt1_ramp_steps, dt1_hold_steps, grey_top_km, rsst_depth_km, dump_shells, omega_rot, coriolis, lz_correct_steps, lz_correct_dt, use_B, alpha_glm, glm_ch, glm_cfl_frac, b_diff_factor, va_max, b_bc_bottom, b_bc_top, b_top_beq, b_seed, b_seed_G, b_seed_r1_rsun, b_seed_r2_rsun, export_state, import_dir, import_mirror_b, plot_blocks
 
 contains
 
@@ -830,6 +840,8 @@ contains
     if (mlt_gough_tayler .and. .not. (use_B .and. use_convection)) call arbor_abort('mlt_gough_tayler needs use_B and use_convection')
     if (turb_quench .and. .not. use_B) call arbor_abort('turb_quench needs use_B')
     if (mlt_wall_hp < 0.0_dp) call arbor_abort('mlt_wall_hp must be >= 0')
+    if (import_mirror_b .and. .not. (use_B .and. len_trim(import_dir) > 0 .and. .not. use_atmosphere)) &
+        call arbor_abort('import_mirror_b needs use_B and import_dir (a cascade import, no atmosphere)')
     if (mlt_wall_hp > 0.0_dp .and. .not. (mlt_switch .and. use_convection .and. wall_top == 'face')) &
         call arbor_abort("mlt_wall_hp needs mlt_switch, use_convection and wall_top = 'face'")
   end subroutine read_params

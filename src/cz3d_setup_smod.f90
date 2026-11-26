@@ -1291,7 +1291,10 @@ contains
     if (m == 0 .and. use_atmosphere .and. Key_IB(KI+1, iBlock)*nb(1) >= k_join) return
     ! the cascade: a block above the export's top keeps the init file's state
     ! (B = 0 with no seed: with a conductor top below, B_r ~ 0 at the old top)
-    if (m == 0 .and. Key_IB(KI+1, iBlock)*nb(1) >= imp_top) return
+    if (m == 0 .and. Key_IB(KI+1, iBlock)*nb(1) >= imp_top) then
+      if (import_mirror_b) call import_mirror_field(iBlock)
+      return
+    end if
     if (m == 0) call arbor_abort('cz3d: import: no exported block at this place (a different grid?)')
     allocate(buf(imp_nb(1), imp_nb(2), imp_nb(3), imp_nv))
     write(name, '(A,A,I4.4,A)') trim(import_dir), '/state_export_r', imp_file(m), '.bin'
@@ -1301,6 +1304,84 @@ contains
     i0 = Key_IB(KI+1, iBlock)*nb(1) - imp_key(KI+1, m)*imp_nb(1)
     State_GVB(1:nb(1), 1:nb(2), 1:nb(3), 1:min(nv, imp_nv), iBlock) = buf(i0+1:i0+nb(1), :, :, 1:min(nv, imp_nv))
   end subroutine import_block
+
+  ! import_mirror_b: block iBlock lies above the export's top (imp_top). Its
+  ! field: at each cell (height h = r - r_top above the old top face r_top)
+  ! the exported field of the same column at r_s = r_top - h (linear between
+  ! cell centres; between the old top cell's centre and the face, B_h that
+  ! cell's and B_r linear to 0 at the face, the conductor's odd B_r), B_r
+  ! negated, times w = sqrt(p0(r)/p0(r_s)) (beta kept along the column). The
+  ! gas: rho kept, s lowered so that p_gas = p - B^2/8 pi ((dP/ds)_rho =
+  ! rho T (Gamma_3 - 1), one step: beta >> 1): a cooler, neutrally buoyant
+  ! field region in total-pressure balance (a magnetostatic start; with rho
+  ! lowered at fixed s instead, the whole layer is buoyant and starts to rise)
+  subroutine import_mirror_field(iBlock)
+    integer, intent(in) :: iBlock
+    real(dp), allocatable :: col(:,:,:,:), buf(:,:,:,:), r_c_g(:), r_f_g(:), p0_g(:)
+    real(dp) :: rtop, rs, a, w, ls0, b2, rho, out(n_field)
+    integer :: m, u, i, j, k, ig, ks, nm
+    character(len=300) :: name
+    allocate(col(imp_top, nb(2), nb(3), br_:bp_), buf(imp_nb(1), imp_nb(2), imp_nb(3), imp_nv))
+    col = 0.0_dp
+    nm = 0
+    do m = 1, size(imp_key, 2)
+      if (imp_key(KP, m) /= Key_IB(KP, iBlock)) cycle
+      if (any(imp_key(KL+2:KL+3, m) /= Key_IB(KL+2:KL+3, iBlock))) cycle
+      if (any(imp_key(KI+2:KI+3, m) /= Key_IB(KI+2:KI+3, iBlock))) cycle
+      write(name, '(A,A,I4.4,A)') trim(import_dir), '/state_export_r', imp_file(m), '.bin'
+      open(newunit=u, file=trim(name), access='stream', form='unformatted', status='old', action='read')
+      read(u, pos=imp_pos(m) + 4_i8*KEY_LEN) buf
+      close(u)
+      i = imp_key(KI+1, m)*imp_nb(1)
+      col(i+1:i+imp_nb(1), :, :, :) = buf(:, :, :, br_:bp_)
+      nm = nm + imp_nb(1)
+    end do
+    if (nm /= imp_top) call arbor_abort('cz3d: import_mirror_b: the exported column is incomplete')
+    ! the whole column's background (the block's views rebound after)
+    call cz_unbind()
+    allocate(r_c_g(1:n_r), r_f_g(0:n_r), p0_g(1:n_r))
+    r_c_g = r_c(1:n_r);  r_f_g = r_f(0:n_r);  p0_g = p0(1:n_r)
+    call cz_bind(iBlock)
+    rtop = r_f_g(imp_top)
+    do i = 1, nb(1)
+      ig = r_off + i
+      rs = 2.0_dp*rtop - r_c_g(ig)
+      if (rs >= r_c_g(imp_top)) then
+        ks = imp_top;  a = 1.0_dp
+      else
+        ks = imp_top - 1
+        do while (ks > 1 .and. r_c_g(ks) > rs)
+          ks = ks - 1
+        end do
+        a = (rs - r_c_g(ks))/(r_c_g(ks+1) - r_c_g(ks))     ! (the weight of cell ks + 1)
+        a = max(0.0_dp, min(1.0_dp, a))
+      end if
+      if (ks == imp_top) then
+        ls0 = log(p0_g(imp_top))
+      else
+        ls0 = (1.0_dp - a)*log(p0_g(ks)) + a*log(p0_g(ks+1))
+      end if
+      w = sqrt(p0_g(ig)/exp(ls0))
+      do k = 1, nb(3)
+        do j = 1, nb(2)
+          if (ks == imp_top) then
+            State_GVB(i, j, k, bt_:bp_, iBlock) = w*col(imp_top, j, k, bt_:bp_)
+            State_GVB(i, j, k, br_, iBlock) = -w*col(imp_top, j, k, br_)*(rtop - rs)/(rtop - r_c_g(imp_top))
+          else
+            State_GVB(i, j, k, bt_:bp_, iBlock) = w*((1.0_dp - a)*col(ks, j, k, bt_:bp_) + a*col(ks+1, j, k, bt_:bp_))
+            State_GVB(i, j, k, br_, iBlock) = -w*((1.0_dp - a)*col(ks, j, k, br_) + a*col(ks+1, j, k, br_))
+          end if
+          State_GVB(i, j, k, psi_, iBlock) = 0.0_dp
+          ! the gas: p_gas = p - B^2/8 pi at fixed rho (cooler)
+          b2 = sum(State_GVB(i, j, k, br_:bp_, iBlock)**2)
+          rho = rho0(i) + rq(i)*State_GVB(i, j, k, rho1_, iBlock)
+          call eos_eval(tab, rho, s0(i) + State_GVB(i, j, k, s1_, iBlock), out)
+          State_GVB(i, j, k, s1_, iBlock) = State_GVB(i, j, k, s1_, iBlock) &
+              - min(b2/(8.0_dp*pi), 0.5_dp*exp(out(F_LNP)))/(rho*exp(out(F_LNT))*out(F_GAMMA3M1))
+        end do
+      end do
+    end do
+  end subroutine import_mirror_field
 
   ! import_cz_on_restart: the CZ blocks (below the join) from the export
   module subroutine cz_import_cz()
