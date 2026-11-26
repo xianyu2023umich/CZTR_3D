@@ -1,0 +1,51 @@
+! Radial cascade at 0.47 deg, level 2 with the closure's mean-field pumping
+! (2026-11-26): casc047_l2mlt with only the pumping changed. Same import
+! (casc047_l1's year-1 export, t = 1 yr), 140 cells (top at -6.4 Mm).
+! - casc047_l2mlt (pumping gamma_r = -f v_MLT, c_gamma = 1: 100-166 m/s in
+!   the top 14 Mm) emptied the top: at day 5.8 rms B_h 31 G at the top
+!   (B/B_eq 0.01; l2test 1035 G, 0.26), field falling off above -15 Mm,
+!   resolved v_r there (7-107 m/s) slower than the pumping. MLT itself worked
+!   (0.6-0.8 Lsun above -15 Mm, top v_h 710 -> 480 m/s, no > 5 kG cells in
+!   the top 10 Mm).
+! - Here the pumping is the mean-field density-gradient term,
+!   turb_gamma_form = 'density': gamma_r = -k eta_t/H_rho, k = 1/2 (the
+!   default turb_gamma_k), eta_t = f v ell/3. Pumping against the turbulent
+!   diffusion balances at B ~ rho^k: k = 1/2 is B ~ sqrt(rho), the
+!   equipartition scaling. eta_t/H_rho ~ 0.28 f v here, so ~0.14 f v: 10-24
+!   m/s at this top (Sun: 20-50 m/s near the surface). c_gamma = 1 was k ~3.6
+!   in these units (B ~ rho^3.6).
+! - Everything else as casc047_l2mlt (MLT with mlt_R0 = 1 and the wall term,
+!   eta_t and nu_t with c = 1, no quenching, no b_top_beq, no cap).
+! - Compare with l2mlt and l2test at the same days: rms B_h and B/B_eq in the
+!   top 15 Mm (target: a few hundred G, ~0.1 B_eq), max |B| there (the 15-20
+!   kG tubes), turb_NNNN.dat's gamma_r, v and Mach, the L budget.
+! - 1.875 deg stand-in: 200 steps fine; gamma_r = 0.13-0.15 f v as expected;
+!   k = 0 reproduces no pumping bit for bit.
+! - Cost: as l2mlt (~40 s per 100 steps on 8 skx nodes, dt ~25 s: ~4 days per
+!   2 h job; 12 nodes ~1.5x faster). The job's limit stops it with a restart.
+!   bash tools/submit_dev.sh runs/casc047_l2k05.nml
+!   (or: sbatch -N 6 --ntasks-per-node 96 -t 02:30:00 tools/job.stampede3_seq runs/casc047_l2k05.nml)
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1/export_y1'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 140
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2k05'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0, mlt_wall_hp = 1.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_gamma_form = 'density', turb_gamma_k = 0.5
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 3.2424e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 400, plot_dt = 0.0, restart_dt = 86400.0
+  dump_shells = 100, 112, 113, 126, 132, 140
+  wall_time_margin = 600.0
+  export_state = .true.
+/

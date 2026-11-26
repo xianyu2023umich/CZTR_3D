@@ -2019,8 +2019,8 @@ contains
         end do
       end do
     end do
-    ! turb_c_gamma: the pumping's E = gamma_r e_r x B, (E_theta, E_phi) += gamma_r (-B_phi, B_theta)
-    if (turb_c_gamma > 0.0_dp .and. allocated(TurbC_GB)) then
+    ! the pumping (turb_pump): E = gamma_r e_r x B, (E_theta, E_phi) += gamma_r (-B_phi, B_theta)
+    if (turb_pump .and. allocated(TurbC_GB)) then
       do k = 1 - ng, nb(3) + ng
         do j = 1 - ng, nb(2) + ng
           if ((j < 1 .or. j > nb(2)) .and. (k < 1 .or. k > nb(3))) cycle
@@ -2411,7 +2411,7 @@ contains
     m = nb(1)
     gt = mlt_gough_tayler .and. use_B
     dgt = 0.0_dp
-    turb_on = max(turb_c_eta, turb_c_nu, turb_c_gamma) > 0.0_dp
+    turb_on = max(turb_c_eta, turb_c_nu) > 0.0_dp .or. turb_pump
     if (turb_on) then
       if (.not. allocated(turb_acc)) then
         allocate(turb_acc(1:n_r, 2), turb_v(-1:n_r+2), turb_eta(-1:n_r+2), turb_nu(-1:n_r+2), turb_gam(-1:n_r+2))
@@ -2550,7 +2550,8 @@ contains
   ! The turbulent closure's coefficients per cell (turb_c_*): with ell =
   ! alpha_mlt H_p of the background and the cell's f v_MLT,
   !   eta_t = turb_c_eta f v ell/3 q, nu_t = turb_c_nu f v ell/3 q,
-  !   gamma_r = -turb_c_gamma f v q,
+  !   gamma_r = -turb_c_gamma f v q (turb_gamma_form = 'mlt') or
+  !   gamma_r = turb_gamma_k f v ell/3 q dln(rho0)/dr ('density'),
   ! q = 1/(1 + B_h^2/B_eq^2), B_eq^2 = 4 pi rho v_MLT^2 with turb_quench
   ! (the horizontal field's quenching; the radial field's effect is Gough &
   ! Tayler's, mlt_gough_tayler, through v_MLT), else 1. Then the ghosts (two
@@ -2559,7 +2560,7 @@ contains
   subroutine turb_coeff_fill(iBlocks)
     integer, intent(in) :: iBlocks(:)
     integer :: jb, ib, i, j, k
-    real(dp) :: ell, fv, q, rp, beq2
+    real(dp) :: ell, fv, q, rp, beq2, dlnrho
     do jb = 1, size(iBlocks)
       ib = iBlocks(jb)
       call cz_bind(ib)
@@ -2580,7 +2581,12 @@ contains
             end if
             TurbC_GB(i, j, k, 1, ib) = turb_c_eta*fv*ell/3.0_dp*q
             TurbC_GB(i, j, k, 2, ib) = turb_c_nu*fv*ell/3.0_dp*q
-            TurbC_GB(i, j, k, 3, ib) = -turb_c_gamma*fv*q
+            if (turb_gamma_form == 'density') then
+              dlnrho = dlnrho0_dr(i, r_off + i)
+              TurbC_GB(i, j, k, 3, ib) = turb_gamma_k*fv*ell/3.0_dp*q*dlnrho
+            else
+              TurbC_GB(i, j, k, 3, ib) = -turb_c_gamma*fv*q
+            end if
           end do
         end do
       end do
@@ -2626,9 +2632,24 @@ contains
       ell = alpha_mlt*p0(g)/(rho0(g)*g_c(g))
       turb_eta(g) = turb_c_eta*turb_v(g)*ell/3.0_dp
       turb_nu(g) = turb_c_nu*turb_v(g)*ell/3.0_dp
-      turb_gam(g) = -turb_c_gamma*turb_v(g)
+      if (turb_gamma_form == 'density') then
+        turb_gam(g) = turb_gamma_k*turb_v(g)*ell/3.0_dp*dlnrho0_dr(g, g)
+      else
+        turb_gam(g) = -turb_c_gamma*turb_v(g)
+      end if
     end do
   end subroutine turb_profile
+
+  ! dln(rho0)/dr of the background at cell i of the bound view (global cell
+  ! gi): centred, one-sided at the radial walls (the background's ghost cells
+  ! are not used)
+  real(dp) function dlnrho0_dr(i, gi)
+    integer, intent(in) :: i, gi
+    integer :: il, iu
+    il = merge(i, i - 1, gi == 1)
+    iu = merge(i, i + 1, gi == n_r)
+    dlnrho0_dr = (log(rho0(iu)) - log(rho0(il)))/(r_c(iu) - r_c(il))
+  end function dlnrho0_dr
 
   ! Let MPI move the ghost messages in flight (Open MPI's shared memory and
   ! most networks send large messages by rendezvous: the data moves only
