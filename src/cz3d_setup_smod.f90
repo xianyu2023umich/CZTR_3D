@@ -97,6 +97,9 @@ contains
         Hp = 0.5_dp*(p0(i)/(rho0(i)*g_c(i)) + p0(i+1)/(rho0(i+1)*g_c(i+1)))
         R = Hp/(r_f(i)*dtheta)
         f_mlt_g(i, lev) = 1.0_dp/(1.0_dp + (R/mlt_R0)**mlt_p)
+        ! under the top wall (mlt_wall_hp): the larger of the two
+        if (mlt_wall_hp > 0.0_dp) f_mlt_g(i, lev) = max(f_mlt_g(i, lev), 1.0_dp/(1.0_dp + ((r_f(n_r) - r_f(i)) &
+            /(mlt_wall_hp*p0(n_r)/(rho0(n_r)*g_c(n_r))))**mlt_p))
       end do
     end do
     lev_view = refine_h

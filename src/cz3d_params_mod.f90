@@ -160,6 +160,13 @@ module cz3d_params_mod
   ! the number of pressure scale heights per horizontal cell; off: f = 1
   logical  :: mlt_switch = .false.
   real(dp) :: mlt_R0 = 4.0_dp, mlt_p = 4.0_dp
+  ! mlt_wall_hp > 0 (with mlt_switch, wall_top = 'face'): also on under the top
+  ! wall, where the wall stops the convection that the Sun has there (v_r -> 0
+  ! over ~1-2 H_p: the cascade levels' pile-up layer): f = max(f, f_wall),
+  ! f_wall = 1/(1 + (d/(mlt_wall_hp H_top))^mlt_p), d the face's depth below
+  ! the top face, H_top the top cell's pressure scale height. The MLT flux
+  ! (0 through the wall face) and the closure (turb_c_*) follow f
+  real(dp) :: mlt_wall_hp = 0.0_dp
 
   ! --- well balanced gravity: g = -(dp0/dr)/rho0 with the momentum
   !     equation's radial stencil in cells 1..n_r, so the background force
@@ -730,7 +737,7 @@ module cz3d_params_mod
   namelist /cz3d/ turb_c_eta, turb_c_nu, turb_c_gamma, mlt_gough_tayler, turb_quench, cond_limiter, cond_hot_to_cold, box_fine_from, H_B_rho_exp, va_cap_horizontal, overlap_fills, grey_atm_blocks, b_eta_radial, phot_band_file, phot_n_lambda, phot_lambda_A, phot_z_km, euv_dt, euv_at_end, euv_trac, euv_n_view, euv_npix, euv_lon_deg, euv_lat_deg, euv_fov_rsun, euv_table, b_smooth_cells, test_freeze_b, b_eta_dr, b_eta_cs, test_b_diff_only, b_diff_form, b_diffusion_h, b_diff_limiter, cond_dB0_G, cond_dB_zj_km, cond_dB_w_km, si_alfven, wave_cfl_cs_only, trac_Tc, trac_Tlow, si_radial, si_cfl, si_diff_cap, si_z_km, si_diff_precond, wave_cfl_max, atm_match_base, atm_match_on_restart, atm_match_z_km, v_damp_time_s, v_damp_ramp_s, cond_tau_fsat, box_lat_deg, box_lon_deg, box_radius_deg, box_z_km, box_every, H_B_sat_G, import_cz_on_restart, freeze_side, v_damp_below_km, v_damp_above_km, v_damp_taper_km, freeze_cz_mode, freeze_float_cells, ghost_limiter, mf_iter, mf_alpha, dpf_edge_cells, dpf_eps, dpf_operator, dpf_tol, dpf_maxit, dpf_check, v_damp_n, v_damp_steps, v_damp_ramp, pfss_lmax, pfss_iter, pfss_check, plot_at_end, va_dt_target, va_floor_cs, H_B, lambda_B_km, n_gate, cond_along_b, b_iso_G, b_seed_rss_rsun, H_c, lambda_c_km, H_ext, lambda_ext_rsun, cond_r_rsun, alpha_cl, use_atmosphere, use_conduction, use_losses, use_heating, z_atm_km, w_atm_km, H_peak, z_heat_km, &
       T_floor, rho_floor, f_cfl_cond, dt_rad_factor, atomic_dir, coronal_file, freeze_cz, diff_top_above_km, grid_file, init_file, table_file, opacity_file, out_dir, n_r_cells, n_theta, n_phi, nb_r, mr_levels, mr_extrapolate, mr_relevel, mr_relevel_dt, mr_by_shell, qconv_face, nb_theta, &
       nb_phi, cfl, t_end, dt_max, n_step_max, n_log, dt_prof, plot_dt, use_radiation, use_convection, &
-      use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, use_diffusion, &
+      use_hyperbolic, alpha_mlt, L_bottom_Lsun, grey_tau_above, mlt_switch, mlt_R0, mlt_p, mlt_wall_hp, use_diffusion, &
       use_minmod, diffusion_h, diff_top_km, diffusion_heating, wall_bottom, wall_top, ds1_random, c_target, rsst_q, rsst_form, yy_margin, refine_h, patch_level, patch_lat_deg, patch_lon_deg, patch_radius_deg, probe_lat_deg, probe_lon_deg, probe_radius_deg, probe_cells, g_from_background, restart_dt, dt_budget, restart_from, restart_domain_tol, restart_new_output, wall_time_max, wall_time_margin, wall_check_steps, r_top_rsun, top_energy, cool_width_km, cool_width_hp, dt1, prof_every, dt1_ramp_steps, dt1_hold_steps, grey_top_km, rsst_depth_km, dump_shells, omega_rot, coriolis, lz_correct_steps, lz_correct_dt, use_B, alpha_glm, glm_ch, glm_cfl_frac, b_diff_factor, va_max, b_bc_bottom, b_bc_top, b_top_beq, b_seed, b_seed_G, b_seed_r1_rsun, b_seed_r2_rsun, export_state, import_dir, plot_blocks
 
 contains
@@ -822,6 +829,9 @@ contains
         call arbor_abort('turb_c_* need global steps (dt1 = 0, mr_levels <= 1): their profile is a sum over all ranks')
     if (mlt_gough_tayler .and. .not. (use_B .and. use_convection)) call arbor_abort('mlt_gough_tayler needs use_B and use_convection')
     if (turb_quench .and. .not. use_B) call arbor_abort('turb_quench needs use_B')
+    if (mlt_wall_hp < 0.0_dp) call arbor_abort('mlt_wall_hp must be >= 0')
+    if (mlt_wall_hp > 0.0_dp .and. .not. (mlt_switch .and. use_convection .and. wall_top == 'face')) &
+        call arbor_abort("mlt_wall_hp needs mlt_switch, use_convection and wall_top = 'face'")
   end subroutine read_params
 
 end module cz3d_params_mod
