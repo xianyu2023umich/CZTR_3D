@@ -1,0 +1,57 @@
+! Radial cascade at 0.47 deg, level 3 from the closure run (2026-11-26): 168
+! cells (top at 0.998 R, -1.5 Mm), imported from casc047_l2k05's export (t = 1
+! yr + 10 d), with the L2 closure carried on: the first L3 test of the whole
+! chain (MLT + eta_t/nu_t + density pumping k = 1/2).
+! - Why: l3test and l3nocap (from casc047_l2test, no closure) crashed at day
+!   ~1.4-1.5 in the top cell over a 15-18 kG bundle that L2's wall had piled
+!   up (l2test top: B/B_eq 0.37 at day 10, max |B| 17.8 kG, 1.6x the B_eq of
+!   its fastest flow; at L3's top that is above pressure balance, sqrt(8 pi
+!   p) = 10 kG at -1.5 Mm). l2k05's top at day 10: B/B_eq 0.18, max |B| 7.3
+!   kG (= the B_eq of its fastest flow, 1.35 km/s), beta ~500 at -6.4 Mm.
+! - Closure as casc047_l2k05: MLT with the resolution switch (mlt_R0 = 1) and
+!   the wall term, eta_t = nu_t = f v ell/3 (c = 1), turb_gamma_form =
+!   'density' with k = 1/2, no quenching.
+! - import_mirror_b as casc047_l3mir: the new cells 141-168 start with the old
+!   ghosts' field continued (B_r odd, B_h even, scaled by sqrt(p0 ratio): beta
+!   kept), the gas magnetostatic, so no magnetic-pressure jump at the old face.
+!   So this run differs from l3test in the L2 state (l2k05 vs l2test), the
+!   closure, and the mirror.
+! - No Alfven cap (cascade rule; l3test/l3mir used va_max = 10 km/s for speed).
+!   dt is set by v_A over dr (92 km at the top): l3nocap ran at ~1.2 s with
+!   the 15 kG bundle; with the weaker field expect ~1.5-3 s.
+! - Compare with l3test/l3nocap at days 0.1, 0.25, 0.5, 1, 1.5 (log.txt): max
+!   Mach, max v_h, min rho1/rho0 (l3test: -0.17/-0.24/-0.27 at 0.1/0.25/0.5 d,
+!   -0.44 at 1.4 d, NaN at 1.48 d), max |B| and max v_A, dt; the new layer's
+!   B/B_eq, max |B| on shells 154/162/168, the L budget (MLT vs resolved).
+! - Cost: ~40 s per 100 steps on 8 skx nodes (6 spr x 96 ~1.35x faster than
+!   12 skx); at dt 2 s that is ~5.5 h per model day on 8 skx nodes, so day
+!   1.5 takes several 2 h skx-dev jobs (continue with tools/job.stampede3).
+! - Needs casc047_l2k05's state_export_r*.bin from its day-10 finish (check
+!   state_export_meta.bin's date).
+!   bash tools/submit_dev.sh -N 6 runs/casc047_l3k05.nml
+!   then: bash tools/submit_dev.sh -N 6 -j tools/job.stampede3 runs/casc047_l3k05.nml
+!   (or: sbatch -N 6 --ntasks-per-node 96 -t 12:00:00 tools/job.stampede3 runs/casc047_l3k05.nml)
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2k05', import_mirror_b = .true.
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 168
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l3k05'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0, mlt_wall_hp = 1.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_gamma_form = 'density', turb_gamma_k = 0.5
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 3.25968e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 300, plot_dt = 0.0, restart_dt = 43200.0
+  dump_shells = 112, 140, 141, 154, 162, 168
+  wall_time_margin = 600.0
+  export_state = .true.
+/
