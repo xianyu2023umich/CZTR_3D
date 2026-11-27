@@ -1,0 +1,52 @@
+! Radial cascade at 0.47 deg, PRODUCTION level 2 (2026-11-26): 140 cells (top
+! at 0.991 R, -6.4 Mm), imported from casc047_l1's year-2 export (t = 2 yr,
+! statistically steady since ~day 400), 20 days, exported at the end for L3.
+! - Closure as casc047_l2k05 (MLT with mlt_R0 = 1 and the wall term; eta_t =
+!   nu_t = f v ell/3, c = 1; density pumping gamma_r = -k eta_t/H_rho), but
+!   k = 2 here, and k is a WALL REPAIR, not physics: the Sun has no surface
+!   at -6.4 Mm, so the top should continue the profile below (as L2 dissolved
+!   L1's wall hook). At day 5.7 the top B/B_eq vs -20 Mm hooked up with k =
+!   1/2 (0.119 vs 0.064) and k = 1 (0.089 vs 0.065) and emptied with c_gamma
+!   = 1 (~k 3.6 at the top; 0.01); k = 2 interpolates to a smooth top. The
+!   pile-up is set by the resolved flow at the wall plus the grid resistivity
+!   |v| dr/2 (~eta_t here), which the k balance does not contain. L3 may
+!   need another k; L4 (the real surface) takes k from convection physics.
+! - The deep part does not depend on k (the pumping goes with the MLT's
+!   unresolved fraction f; below -20 Mm l2test/l2mlt/l2k05/l2k10 agree).
+! - Check after the first ~5 days: B/B_eq in the top 20 Mm (no hook, no dip;
+!   compare l2k05/l2k10, output_stampede3/casc047_l2k10/figs/8_B_over_Beq_k.png),
+!   max |B| in the top 10 Mm, dt, the L budget. Adjust k at a restart if the
+!   top still hooks or empties; stop early once cells 132-140 are flat for ~3
+!   days.
+! - Needs casc047_l1's year-2 export copied aside first (a later L1 run would
+!   overwrite casc047_l1/state_export_*):
+!     mkdir -p $SCRATCH/CZTR_3D_out/casc047_l1/export_y2
+!     cp $SCRATCH/CZTR_3D_out/casc047_l1/state_export_* $SCRATCH/CZTR_3D_out/casc047_l1/export_y2/
+! - Cost: dt ~21 s; ~1.6 h per 10 days on 6 spr nodes (l2mlt), so ~3.5 h for
+!   20 days, ~45 SU. tools/job.stampede3 continues from run_status.txt if the
+!   job stops on its time limit.
+!   sbatch -p spr -N 6 --ntasks-per-node 96 -t 05:00:00 tools/job.stampede3 runs/casc047_l2.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l1/export_y2'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 140
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0, mlt_wall_hp = 1.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_gamma_form = 'density', turb_gamma_k = 2.0
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 6.4848e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 400, plot_dt = 0.0, restart_dt = 86400.0
+  dump_shells = 100, 112, 113, 126, 132, 140
+  wall_time_margin = 600.0
+  export_state = .true.
+/
