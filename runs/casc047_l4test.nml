@@ -1,0 +1,56 @@
+! Radial cascade at 0.47 deg, level 4 TEST (2026-11-27): 196 cells (top at
+! 1.0 R, the photosphere), imported from casc047_l3k05's export (t = 1 yr +
+! 12 d), 1 day. A stress test: l3k05 is the only L3 that survived, and its top
+! is piled up (B/B_eq 0.62 at -1.5 Mm, max |B| 5 kG = 0.5 sqrt(8 pi p)), the
+! worst state an L4 insertion could start from. Questions: does the L4
+! insertion survive; dt; what the near-surface field does with k = 2.
+! - Top as the photosphere, as mhd5 (c196_m0_r2c10_s3_mhd5): top_energy =
+!   'eddington' (radiation leaves through the top face; grey_tau_above 0.01,
+!   implicit grey radiation in the top 1000 km), diff_top_km = 500 (full
+!   diffusion in the top 500 km), b_bc_top = 'radial' (B_h = 0 at the top,
+!   field vertical: Hotta et al. 2014, mhd5, the code's default; a conductor
+!   would trap B_h at a beta ~1 surface). The L1-L3 runs used 'cooling' and
+!   'conductor' (tops deep in the CZ). In this model L_rad takes over at
+!   ~-330 km (cell 186); the top cell (z -9 km, dr 31 km) has T 4870 K, rho
+!   2.2e-8, sqrt(8 pi p) = 0.42 kG.
+! - Closure as l3k05 (MLT mlt_R0 = 1 + wall term, eta_t = nu_t = f v ell/3)
+!   with k = 2 (a wall repair, as casc047_l2/l3). Here k = 2 is strong: on the
+!   1.875 deg stand-in gamma_r = 550-840 m/s from -1.4 Mm to -0.5 Mm (0.5-0.7
+!   f v_MLT; l2mlt's gamma = f v emptied its top), 0 in the stable photosphere
+!   (f v = 0 above -330 km).
+! - import_mirror_b: the new cells start with L3's top field continued at
+!   fixed beta (5 kG at -1.5 Mm -> ~0.2 kG at the top). No Alfven cap.
+! - 1.875 deg stand-in (from a 20-step L3 stand-in export, both top fields): 60
+!   steps fine, dt 2.1 s (cell 196, the radial wave 7.4 km/s over dr 31 km),
+!   L_top 0.96.
+! - Compare with l3k05's insertion: max Mach, min rho1/rho0, max v_h, max |B|
+!   and max v_A, dt (expect ~2 s, falling towards mhd5's ~0.8 s if kG tubes
+!   form at the surface), the field and B/B_eq in the new layer (cells
+!   169-196), L_top and the L budget.
+! - Cost: dt ~2 s and 196 cells: ~2.5x l3k05 per model day, ~6 h per day on 6
+!   spr nodes (~70 SU); more if dt falls.
+!   sbatch -p spr -N 6 --ntasks-per-node 96 -t 10:00:00 tools/job.stampede3 runs/casc047_l4test.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l3k05', import_mirror_b = .true.
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 196
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l4test'
+  wall_top = 'face'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0, diff_top_km = 500.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0, mlt_wall_hp = 1.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_gamma_form = 'density', turb_gamma_k = 2.0
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 3.26832e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 300, plot_dt = 0.0, restart_dt = 21600.0
+  dump_shells = 168, 169, 182, 186, 190, 196
+  wall_time_margin = 600.0
+  export_state = .true.
+/
