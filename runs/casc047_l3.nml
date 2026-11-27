@@ -1,0 +1,48 @@
+! Radial cascade at 0.47 deg, PRODUCTION level 3 (2026-11-27): 168 cells (top
+! at 0.998 R, -1.5 Mm), imported from casc047_l2's export (production L2, k =
+! 2, stopped at t = 2 yr + 19.33 d), 5 days, exported at the end for L4.
+! - casc047_l3k05 (from l2k05, k = 1/2) survived the insertion (2 days; Mach
+!   0.19 vs l3test's 0.5-0.9 and NaN at day 1.48; min rho1/rho0 -0.02 vs
+!   -0.44) but the new layer piled up against L3's wall: top B/B_eq 0.21 ->
+!   0.62 from day 0.26 to 2, +0.2/day and still growing; B_h ~flat (470 -> 330
+!   G) while rho drops 76x; max v_A 1 -> 7.8 km/s, dt 5.4 -> 3.0 s.
+! - k = 2 here is a WALL REPAIR (as casc047_l2): every top that is later
+!   removed (L1-L4 walls) takes a repair k so that the field under it is the
+!   convective level when the wall goes; physical k only where there is no
+!   wall (the atmosphere run). Conservative choice: k = 2 errs towards
+!   emptying the top (safe, visible in the first job; l2mlt-like), k = 1
+!   towards a slow pile-up (dangerous, shows only after days). At L3 k = 2 is
+!   gamma ~200-350 m/s in the new layer (k = 1/2 gave 50-90 m/s; resolved v_r
+!   50-100 m/s; casc047_l2 worked at gamma ~1.2 v_r).
+! - Check after the first job (the field reaches the new layer in ~0.3-0.5
+!   day): top B/B_eq levels at ~0.05-0.15: keep; drops below ~0.03 and keeps
+!   falling: k = 1 at the restart; still climbing: raise k.
+! - As casc047_l3k05 otherwise: closure (MLT mlt_R0 = 1 + wall term, eta_t =
+!   nu_t = f v ell/3), import_mirror_b, no Alfven cap.
+! - Cost: l3k05 took 4.6 h for 2 days on 6 spr nodes at dt 3-5 s: ~12 h for 5
+!   days (less if v_A stays low). tools/job.stampede3 continues after a stop.
+!   sbatch -p spr -N 6 --ntasks-per-node 96 -t 14:00:00 tools/job.stampede3 runs/casc047_l3.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l2', import_mirror_b = .true.
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 168
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l3'
+  wall_top = 'face'
+  top_energy = 'cooling', cool_width_hp = 1.0, grey_top_km = 1000.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0, mlt_wall_hp = 1.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_gamma_form = 'density', turb_gamma_k = 2.0
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 6.5223e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 300, plot_dt = 0.0, restart_dt = 43200.0
+  dump_shells = 112, 140, 141, 154, 162, 168
+  wall_time_margin = 600.0
+  export_state = .true.
+/
