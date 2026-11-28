@@ -1,0 +1,33 @@
+! casc047_l4's state as an export (2026-11-28): job 3767221 hung at day 1.16
+! (an MPI fault, see tools/watchdog.sh) without writing its export, so this
+! takes its newest complete restart (day 1.0), runs 2 steps and exports, for
+! the atmosphere run runs/casc047_l4atm2.nml. Same physics as casc047_l4.
+! RESTART_FILE is a placeholder: fill in the newest complete restart (same
+! size as the one before) into a local copy, on the login node:
+!   r=$(bash -c 'source tools/watchdog.sh; cz_newest_restart $SCRATCH/CZTR_3D_out/casc047_l4') && echo $r
+!   sed "s#RESTART_FILE#$r#" runs/casc047_l4exp.nml > runs/casc047_l4exp_local.nml
+! then submit both runs in one job:
+!   sbatch -p spr -N 12 --ntasks-per-node 96 -t 05:00:00 tools/job.stampede3_seq runs/casc047_l4exp_local.nml runs/casc047_l4atm2.nml
+&cz3d
+  restart_from = 'RESTART_FILE'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 196
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l4exp'
+  wall_top = 'face'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0, diff_top_km = 500.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0, mlt_wall_hp = 1.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_gamma_form = 'density', turb_gamma_k = 2.0
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 1.0e9, n_step_max = 2, dt_max = 1.0e4
+  n_log = 1, dt_prof = 0.0, prof_every = 100000, plot_dt = 0.0, restart_dt = 0.0
+  wall_time_margin = 600.0
+  export_state = .true.
+/
