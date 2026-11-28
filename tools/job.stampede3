@@ -27,6 +27,10 @@
 # Bound a chained run by t_end (n_step_max counts each job's own steps).
 # restart_from must sit on a line of its own in the namelist.
 #
+# Hangs: tools/watchdog.sh kills a run whose log.txt stops changing for
+# CZ3D_WATCHDOG_S (default 1200 s) and points run_status.txt at its newest
+# complete restart (export CZ3D_WATCHDOG_S=0 before sbatch to switch it off).
+#
 # Monitor: squeue -u $USER;  tail -f out_dir/log.txt;  cancel: scancel <jobid>
 
 #SBATCH -J cz3d                 # job name
@@ -72,5 +76,11 @@ left=$(squeue -h -j "$SLURM_JOB_ID" -o %L 2>/dev/null || true)
 secs=$(echo "$left" | awk -F'[-:]' 'NF {n = NF; s = $n + 60*$(n-1); if (n >= 3) s += 3600*$(n-2); if (n >= 4) s += 86400*$(n-3); print int(s)}')
 if [ "${secs:-0}" -gt 0 ] 2>/dev/null; then export CZ3D_WALL_TIME_MAX=$secs; fi
 echo "job $SLURM_JOB_ID: time left $left (CZ3D_WALL_TIME_MAX=${CZ3D_WALL_TIME_MAX:-unset})"
-ibrun ./$(cfg EXE) "$nml"
+# the hang watchdog (tools/watchdog.sh; CZ3D_WATCHDOG_S, default 1200 s, 0 = off)
+source tools/watchdog.sh
+set +e
+ibrun ./$(cfg EXE) "$nml" & pid=$!
+cz_watchdog "$out_dir" $pid & wd=$!
+wait $pid
+kill $wd 2>/dev/null
 echo "job $SLURM_JOB_ID: $(head -2 "$out_dir/run_status.txt" 2>/dev/null | tr '\n' ' ')"

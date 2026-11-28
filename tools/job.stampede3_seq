@@ -28,13 +28,16 @@ ulimit -s unlimited
 export OMP_NUM_THREADS=1
 export UCX_LOG_LEVEL=ERROR
 
+source tools/watchdog.sh   # the hang watchdog (CZ3D_WATCHDOG_S, default 1200 s, 0 = off)
 for nml in "$@"; do
   out_dir=$(sed -n "s/^ *out_dir *= *'\([^']*\)'.*/\1/p" "$nml" | head -1)
   left=$(squeue -h -j "$SLURM_JOB_ID" -o %L 2>/dev/null || true)
   secs=$(echo "$left" | awk -F'[-:]' 'NF {n = NF; s = $n + 60*$(n-1); if (n >= 3) s += 3600*$(n-2); if (n >= 4) s += 86400*$(n-3); print int(s)}')
   if [ "${secs:-0}" -gt 0 ] 2>/dev/null; then export CZ3D_WALL_TIME_MAX=$secs; fi
   echo "job $SLURM_JOB_ID: $(date '+%H:%M:%S') start $nml (out_dir $out_dir; time left $left)"
-  ibrun ./$(cfg EXE) "$nml"
-  rc=$?
+  ibrun ./$(cfg EXE) "$nml" & pid=$!
+  cz_watchdog "$out_dir" $pid & wd=$!
+  wait $pid; rc=$?
+  kill $wd 2>/dev/null
   echo "job $SLURM_JOB_ID: $(date '+%H:%M:%S') end $nml (exit $rc; $(head -1 "$out_dir/run_status.txt" 2>/dev/null || echo 'no run_status: crashed or stopped'))"
 done
