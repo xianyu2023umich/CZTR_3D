@@ -1,0 +1,71 @@
+! Radial cascade at 0.47 deg, DIRECT L4 + atmosphere TEST (2026-11-27): the
+! production casc047_l3's export (168 cells, t = 2 yr + 25 d) imported into
+! the full CZ + atmosphere grid (560 cells, join at cell 196 = the
+! photosphere, outflow top), 3 h of model time. The alternative to a
+! conductor L4 (runs/casc047_l4.nml) followed by a release: the trapped-field
+! -> real-field transition happens there anyway, and casc047_l3's top is
+! nearly empty (B/B_eq 0.013, rms 7 G, max 208 G at -1.5 Mm, B^2/8pi ~1e-3 p),
+! so the magnetic start is gentle. The question is the HD side: cells
+! 169-196 start convecting from rest (init profile, B = 0) while the
+! atmosphere settles on top of them; hd047_cpl (same atmosphere, 10000 steps
+! stable) had its CZ prepared at the coupled dt first (hd047_czdt), and in
+! CZTR_2D direct coupling without that preparation (run D2) crashed.
+! - No wall at the top of the CZ, so the pumping k is PHYSICAL here: k = 1
+!   (gamma_r = -eta_t/H_rho, the mixing-length estimate; l3k05's k = 1/2
+!   piled up, casc047_l3's k = 2 emptied; realized B ~ rho^(0.3-0.55 k)
+!   because the grid resistivity also diffuses). Literature check pending.
+!   Expect the near-surface B/B_eq to settle at ~0.2-0.5 (quiet Sun) if k is
+!   about right. mlt_wall_hp off (no wall).
+! - The atmosphere as mhd047_cpl_nohb_mc: atm_match_base (per-column pressure
+!   match below 1.2 Mm), si_radial over whole columns + si_alfven, wave cap 1
+!   (c_s only), TRAC 5e5/1.2e4, conduction along B with the mc limiter and
+!   cond_dB0_G 10, grey radiation in the atmosphere blocks, H_c + H_ext
+!   heating (H_B = 0), field-free atmosphere (b_seed 'none'). No Alfven cap
+!   (if the emerging field makes dt collapse: va_cap_horizontal +
+!   va_dt_target, never va_dt_target alone).
+! - import_mirror_b is not allowed with the atmosphere (and not needed: the
+!   L3 top field is ~10 G).
+! - 1.875 deg stand-in (scratchpad l4atm, 40 steps from a 20-step L3 stand-in
+!   export): import fine, atm_match f = 1.000, dt 2.6 -> 1.2 s set by the
+!   chromosphere's start-up flows (|v_r| 15 -> 28 km/s at 1.6-2.2 Mm).
+! - Watch: log.txt (dt, Mach, min rho1/rho0, max v_A), footpoints.txt and the
+!   TR heights, the join (cells 190-200), L_top; the insertion spike (L_total
+!   ~4.7 at step 0 in l3k05/casc047_l3) now reaches the atmosphere's base.
+!   Past atmosphere crashes came within minutes to ~1 h (287 s; ~800 and
+!   ~8000 steps). If the HD start fails: v_damp in the atmosphere for the
+!   first hour, ramped off.
+! - Cost: ~0.6 s of wall per step at dt ~0.5 s on 6 spr nodes (mhd047: 0.62
+!   s/step, dt 0.43 s): 3 h of model time ~4-5 h, ~60 SU. Restarts (~6-8 GB
+!   each) every hour.
+!   sbatch -p spr -N 6 --ntasks-per-node 96 -t 08:00:00 tools/job.stampede3 runs/casc047_l4atm.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l3'
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 560
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l4atm'
+  wall_top = 'outflow'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0, grey_atm_blocks = 1
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_gamma_form = 'density', turb_gamma_k = 1.0
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  diff_top_km = 500.0, diff_top_above_km = 50.0
+  ds1_random = 0.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .true., freeze_side = 'none', atm_match_base = .true.
+  rho_floor = 1.0e-24
+  H_ext = 5.0e-7, lambda_ext_rsun = 0.7, H_c = 3.0e-5, lambda_c_km = 4.0e4
+  H_B = 0.0
+  cond_r_rsun = 5.0, alpha_cl = 1.05
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'radial'
+  cond_along_b = .true., cond_limiter = 'mc', cond_dB0_G = 10.0, si_alfven = .true., wave_cfl_cs_only = .true.
+  b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  si_radial = .true., wave_cfl_max = 1.0, trac_Tc = 5.0e5, trac_Tlow = 1.2e4
+  t_end = 6.52338e7, n_step_max = 100000000, dt_max = 20.0
+  n_log = 20, dt_prof = 0.0, prof_every = 200, plot_dt = 0.0, restart_dt = 3600.0
+  dump_shells = 168, 190, 196, 197, 210, 225, 252, 350
+  wall_time_margin = 900.0
+  export_state = .true.
+/

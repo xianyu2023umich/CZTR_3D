@@ -1,0 +1,50 @@
+! Radial cascade at 0.47 deg, level 4 (2026-11-27): 196 cells (top at 1.0 R,
+! the photosphere), imported from the production casc047_l3's export (t = 2 yr
+! + 25 d, finished), 2 days (first look after ~1 day).
+! - Top: a CONDUCTOR (B_r = 0, B_h mirrored), as L1-L3, not casc047_l4test's
+!   'radial' (B_h = 0, B_r free). L4's top is still a wall that the atmosphere
+!   replaces later (strategy of 2026-11-23: cascade + conductor top, then a
+!   field-free atmosphere and the field emerges by itself). The radial top
+!   destroys horizontal field at the face and passes vertical tubes through
+!   it (l4test: rms B_h << rms B_r at the top), a state the atmosphere would
+!   not inherit.
+! - k = 2 as the wall repair (casc047_l2/l3). Risk: under a conductor at
+!   sqrt(8 pi p) = 0.42 kG (top cell), trapped B_h reaches beta ~1 far sooner
+!   than at the L1-L3 tops (l3test died that way at -1.5 Mm). casc047_l3's
+!   top at k = 2 is nearly empty (B/B_eq 0.013, rms 7 G, max 208 G), so the
+!   mirror start brings little field; watch the new layer's B_h, max |B|, min
+!   rho1/rho0.
+! - Energy at the top as mhd5/l4test: top_energy = 'eddington' (grey_tau_above
+!   0.01, implicit grey radiation in the top 1000 km), diff_top_km = 500.
+! - 1.875 deg stand-in with the conductor top (scratchpad l4tc, 2026-11-27):
+!   60 steps fine, dt 2.1 s (the radial wave over the 31 km top cell).
+! - Check after ~1 day: B/B_eq and rms B_h, B_r in cells 169-196 (no pile-up
+!   under the face, no emptying below -1.5 Mm), max |B| and max v_A, dt, Mach,
+!   min rho1/rho0, L_top and the L budget. Pile-up at the top -> raise k at the
+!   restart; emptied -> fine for the release (the physical k comes then).
+! - Cost: ~6 h per model day on 6 spr nodes at dt ~2 s (more if dt falls).
+!   sbatch -p spr -N 6 --ntasks-per-node 96 -t 14:00:00 tools/job.stampede3 runs/casc047_l4.nml
+&cz3d
+  import_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l3', import_mirror_b = .true.
+  grid_file = 'data/grid_atm20.dat', init_file = 'data/init_wind20_dip_m600.dat', n_r_cells = 196
+  table_file = 'data/eos_table_wind.bin'
+  out_dir = '/scratch/09595/xianyu2023/CZTR_3D_out/casc047_l4'
+  wall_top = 'face'
+  top_energy = 'eddington', grey_tau_above = 0.01, grey_top_km = 1000.0, diff_top_km = 500.0
+  use_convection = .true., mlt_switch = .true., mlt_R0 = 1.0, mlt_p = 4.0, mlt_wall_hp = 1.0
+  turb_c_eta = 1.0, turb_c_nu = 1.0, turb_gamma_form = 'density', turb_gamma_k = 2.0
+  rsst_depth_km = 500.0, rsst_q = -0.5, rsst_form = 'hotta2012'
+  diffusion_heating = .true.
+  ds1_random = 1.0
+  yy_margin = 0, n_theta = 48, n_phi = 144, nb_theta = 8, nb_phi = 24, refine_h = 2, nb_r = 28
+  use_atmosphere = .false.
+  use_B = .true., b_seed = 'none', b_bc_bottom = 'conductor', b_bc_top = 'conductor'
+  si_radial = .true., b_diff_form = 'resistive', b_eta_dr = 1.0
+  omega_rot = 2.6e-6, lz_correct_steps = 20
+  dt1 = 0.0, mr_levels = 0
+  t_end = 6.53958e7, n_step_max = 100000000, dt_max = 1.0e4
+  n_log = 100, dt_prof = 0.0, prof_every = 300, plot_dt = 0.0, restart_dt = 21600.0
+  dump_shells = 168, 169, 182, 186, 190, 196
+  wall_time_margin = 600.0
+  export_state = .true.
+/
